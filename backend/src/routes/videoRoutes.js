@@ -187,24 +187,26 @@ router.get('/', async (req, res, next) => {
     // Status filter:
     if (req.query.status) {
       if (req.query.status === 'queued') {
-        // User explicitly clicked "Queued" in ribbon or dropdown
+        // User explicitly asked for Queued videos
         andConditions.push({
           $or: [
             { status: 'queued' },
             ...(activeQueuedPostVideoIds.length > 0 ? [{ _id: { $in: activeQueuedPostVideoIds } }] : []),
           ],
         });
+      } else if (req.query.status === 'published') {
+        // User explicitly asked for Published videos
+        andConditions.push({ status: 'published' });
       } else {
         andConditions.push({ status: req.query.status });
-        // Exclude active queued videos from other status queries
-        andConditions.push({ status: { $ne: 'queued' } });
+        andConditions.push({ status: { $nin: ['queued', 'published'] } });
         if (activeQueuedPostVideoIds.length > 0) {
           andConditions.push({ _id: { $nin: activeQueuedPostVideoIds } });
         }
       }
     } else {
-      // Default Video Library view: DO NOT SHOW videos that are in the publishing queue!
-      andConditions.push({ status: { $ne: 'queued' } });
+      // Default Video Library view: DO NOT SHOW videos that are queued or published!
+      andConditions.push({ status: { $nin: ['queued', 'published'] } });
       if (activeQueuedPostVideoIds.length > 0) {
         andConditions.push({ _id: { $nin: activeQueuedPostVideoIds } });
       }
@@ -374,7 +376,7 @@ router.get('/stats', async (req, res, next) => {
     });
 
     const notQueuedFilter = {
-      status: { $ne: 'queued' },
+      status: { $nin: ['queued', 'published'] },
       ...(activeQueuedPostVideoIds.length > 0 ? { _id: { $nin: activeQueuedPostVideoIds } } : {}),
     };
 

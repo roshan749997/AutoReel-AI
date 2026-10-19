@@ -5,6 +5,7 @@ import { StatusBanner } from './components/layout/StatusBanner.jsx';
 import { OverviewModule } from './components/modules/OverviewModule.jsx';
 import { SocialAccountsModule } from './components/modules/SocialAccountsModule.jsx';
 import { VideoLibraryModule } from './components/modules/VideoLibraryModule.jsx';
+import { PublishedVideosModule } from './components/modules/PublishedVideosModule.jsx';
 import { PublishingQueueModule } from './components/modules/PublishingQueueModule.jsx';
 import { CalendarModule } from './components/modules/CalendarModule.jsx';
 import { AutomationModule } from './components/modules/AutomationModule.jsx';
@@ -208,6 +209,15 @@ export default function App() {
                   accounts={accounts}
                   onQueuePost={loadData}
                   onReload={loadData}
+                />
+              )}
+
+              {activeTab === 'published' && (
+                <PublishedVideosModule
+                  posts={posts}
+                  accounts={accounts}
+                  onReload={loadData}
+                  onNavigate={setActiveTab}
                 />
               )}
 
