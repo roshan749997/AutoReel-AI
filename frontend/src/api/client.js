@@ -70,6 +70,14 @@ export const api = {
   startSyncJob: (options = {}) => request('/videos/sync/start', { method: 'POST', body: options }),
   getSyncProgress: (jobId) => request(`/videos/sync/progress${jobId ? `?jobId=${jobId}` : ''}`),
   cancelSyncJob: (jobId) => request('/videos/sync/cancel', { method: 'POST', body: { jobId } }),
+  getVideoFoldersSummary: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/videos/folders/summary${query ? `?${query}` : ''}`);
+  },
+  getVideoStats: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/videos/stats${query ? `?${query}` : ''}`);
+  },
   getVideos: (params = {}) => {
     const query = new URLSearchParams(params).toString();
     return request(`/videos${query ? `?${query}` : ''}`);
@@ -82,6 +90,7 @@ export const api = {
   // AI Metadata Generation & Pipeline
   generateAiMetadata: (payload) => request('/ai/generate', { method: 'POST', body: payload }),
   getAiStatus: () => request('/ai/status'),
+  configureAi: (payload) => request('/ai/configure', { method: 'POST', body: payload }),
   startBulkAi: (payload) => request('/ai/bulk/start', { method: 'POST', body: payload }),
   getBulkAiProgress: (jobId) => request(`/ai/bulk/progress${jobId ? `?jobId=${jobId}` : ''}`),
   cancelBulkAi: (jobId) => request('/ai/bulk/cancel', { method: 'POST', body: { jobId } }),
@@ -94,6 +103,7 @@ export const api = {
   },
   createPost: (postData) => request('/posts', { method: 'POST', body: postData }),
   scheduleMultiPlatform: (postData) => request('/posts/multi-platform', { method: 'POST', body: postData }),
+  batchSchedule: (items) => request('/posts/batch-schedule', { method: 'POST', body: { items } }),
   getPost: (id) => request(`/posts/${id}`),
   updatePost: (id, updates) => request(`/posts/${id}`, { method: 'PATCH', body: updates }),
   pausePost: (id) => request(`/posts/${id}/pause`, { method: 'POST' }),
@@ -103,6 +113,10 @@ export const api = {
   retryPost: (id) => request(`/posts/${id}/retry`, { method: 'POST' }),
   publishNow: (id) => request(`/posts/${id}/publish-now`, { method: 'POST' }),
   deletePost: (id) => request(`/posts/${id}`, { method: 'DELETE' }),
+  purgePosts: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/posts/purge/all${query ? `?${query}` : ''}`, { method: 'DELETE' });
+  },
 
   // Automation / n8n
   getWorkflowStatus: () => request('/workflows/status'),

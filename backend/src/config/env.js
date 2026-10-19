@@ -9,6 +9,13 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
+const cleanApiKey = (val) => {
+  if (!val) return '';
+  const match = String(val).match(/(?:X-goog-api-key|key)[:=]\s*([a-zA-Z0-9_\-\.]+)/i);
+  if (match) return match[1].trim();
+  return String(val).replace(/["']/g, '').trim();
+};
+
 export const config = {
   port: parseInt(process.env.PORT || '5000', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -26,8 +33,8 @@ export const config = {
   // AI Configuration
   ai: {
     provider: process.env.AI_PROVIDER || 'gemini', // 'gemini' | 'ollama' | 'manual'
-    geminiApiKey: process.env.GEMINI_API_KEY || '',
-    geminiModel: process.env.GEMINI_MODEL || 'gemini-1.5-flash',
+    geminiApiKey: cleanApiKey(process.env.GEMINI_API_KEY),
+    geminiModel: process.env.GEMINI_MODEL || 'gemini-flash-latest',
     ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
     ollamaModel: process.env.OLLAMA_MODEL || 'llama3.2',
   },

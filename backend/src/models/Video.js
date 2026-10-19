@@ -8,6 +8,15 @@ const videoSchema = new mongoose.Schema(
       unique: true,
       index: true,
     },
+    accountId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Account',
+      index: true,
+    },
+    googleEmail: {
+      type: String,
+      index: true,
+    },
     originalName: {
       type: String,
       required: true,

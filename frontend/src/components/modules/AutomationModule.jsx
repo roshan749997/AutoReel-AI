@@ -44,7 +44,9 @@ export const AutomationModule = ({ n8nStatus, onReload }) => {
     }
   };
 
-  const isRunning = n8nStatus?.connected;
+  const isRunning = Boolean(
+    n8nStatus?.connected ?? n8nStatus?.isReachable ?? (n8nStatus?.dockerStatus === 'running')
+  );
 
   return (
     <div className="space-y-6">

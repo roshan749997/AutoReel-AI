@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { Account } from '../models/Account.js';
+import { Video } from '../models/Video.js';
 import { Post } from '../models/Post.js';
 import { WorkflowLog } from '../models/WorkflowLog.js';
 import { youtubeService } from '../services/youtubeService.js';
@@ -32,6 +33,9 @@ router.get('/', async (req, res, next) => {
 
     if (req.query.isDemo !== undefined && req.query.isDemo !== 'all') {
       filter.isDemo = req.query.isDemo === 'true';
+    } else if (req.query.isDemo === undefined) {
+      // By default, only return real accounts, never demo accounts
+      filter.isDemo = { $ne: true };
     }
 
     if (search && search.trim()) {
@@ -311,6 +315,24 @@ router.post('/:id/disconnect', requireAdminAuth, async (req, res, next) => {
 
     if (account.platform === 'youtube') {
       await youtubeService.revokeToken(account).catch(() => {});
+
+      // Delete all videos associated with this drive/account
+      await Video.deleteMany({
+        $or: [
+          { accountId: account._id },
+          ...(account.googleEmail ? [{ googleEmail: account.googleEmail }] : []),
+        ],
+      });
+
+      // If no other connected YouTube/Google account remains, purge any orphan videos
+      const remainingConnected = await Account.countDocuments({
+        platform: 'youtube',
+        status: 'connected',
+        _id: { $ne: account._id },
+      });
+      if (remainingConnected === 0) {
+        await Video.deleteMany({});
+      }
     }
 
     account.status = 'disconnected';
@@ -377,6 +399,26 @@ router.delete('/:id', requireAdminAuth, async (req, res, next) => {
     if (!account) {
       return next(new AppError('Account not found', 404));
     }
+
+    if (account.platform === 'youtube') {
+      // Delete all videos associated with this drive/account
+      await Video.deleteMany({
+        $or: [
+          { accountId: account._id },
+          ...(account.googleEmail ? [{ googleEmail: account.googleEmail }] : []),
+        ],
+      });
+
+      // If no other connected YouTube/Google account remains, purge any orphan videos
+      const remainingConnected = await Account.countDocuments({
+        platform: 'youtube',
+        status: 'connected',
+      });
+      if (remainingConnected === 0) {
+        await Video.deleteMany({});
+      }
+    }
+
     res.json({ status: 'success', message: 'Account permanently removed' });
   } catch (err) {
     next(err);

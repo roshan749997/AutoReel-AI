@@ -366,3 +366,86 @@ test('GoogleDriveService: validateFolder handles insufficient Drive scope error 
 
   googleDriveService.getAuthenticatedClient = originalGetClient;
 });
+
+test('Video Library: Folders summary and approval status sorting & filtering', async () => {
+  // Insert test videos with varying approval status and duration
+  const testJobId = `sync_test_${Date.now()}`;
+  const v1 = await Video.create({
+    driveFileId: `file_${Date.now()}_1`,
+    originalName: 'clip_01.mp4',
+    cleanTitle: 'Alpha Reel',
+    mimeType: 'video/mp4',
+    duration: 30,
+    folderId: 'folder_abc',
+    folderName: 'Shorts Folder',
+    aiMetadata: {
+      generatedTitle: 'Alpha Shorts Title',
+      approvalStatus: 'approved',
+    },
+    syncJobId: testJobId,
+  });
+
+  const v2 = await Video.create({
+    driveFileId: `file_${Date.now()}_2`,
+    originalName: 'clip_02.mp4',
+    cleanTitle: 'Beta Reel',
+    mimeType: 'video/mp4',
+    duration: 90,
+    folderId: 'folder_abc',
+    folderName: 'Shorts Folder',
+    aiMetadata: {
+      generatedTitle: 'Beta Shorts Title',
+      approvalStatus: 'draft',
+    },
+    syncJobId: testJobId,
+  });
+
+  const v3 = await Video.create({
+    driveFileId: `file_${Date.now()}_3`,
+    originalName: 'clip_03.mp4',
+    cleanTitle: 'Gamma Reel',
+    mimeType: 'video/mp4',
+    duration: 15,
+    folderId: 'folder_xyz',
+    folderName: 'Reels Pool',
+    syncJobId: testJobId,
+  });
+
+  try {
+    // 1. Folders aggregation
+    const folders = await Video.aggregate([
+      { $match: { isArchived: false, folderName: { $exists: true, $ne: '' } } },
+      {
+        $group: {
+          _id: '$folderId',
+          folderName: { $first: '$folderName' },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { count: -1 } },
+    ]);
+
+    const folderAbc = folders.find((f) => f._id === 'folder_abc');
+    assert.ok(folderAbc);
+    assert.equal(folderAbc.count >= 2, true);
+    assert.equal(folderAbc.folderName, 'Shorts Folder');
+
+    // 2. Filter by approvalStatus: approved
+    const approvedVideos = await Video.find({
+      isArchived: false,
+      'aiMetadata.approvalStatus': 'approved',
+    });
+    assert.equal(approvedVideos.some((v) => v._id.equals(v1._id)), true);
+    assert.equal(approvedVideos.some((v) => v._id.equals(v2._id)), false);
+
+    // 3. Sort by duration_desc
+    const sortedDuration = await Video.find({
+      _id: { $in: [v1._id, v2._id, v3._id] },
+    }).sort({ duration: -1 });
+
+    assert.equal(sortedDuration[0].duration, 90);
+    assert.equal(sortedDuration[2].duration, 15);
+  } finally {
+    await Video.deleteMany({ _id: { $in: [v1._id, v2._id, v3._id] } });
+  }
+});

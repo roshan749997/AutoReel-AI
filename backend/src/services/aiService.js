@@ -173,12 +173,16 @@ Video Context:
 - Duration: ${videoData.duration ? `${videoData.duration} seconds` : 'Short vertical reel'}
 - User Notes: "${videoData.notes || 'None'}"
 
+CRITICAL ANTI-NUMBER RULE:
+- If the File Name or title looks like a camera timestamp or raw numbers (e.g. "VID 20260801 191006 507", "VID_...", "IMG_...", or any sequence of digits), DO NOT repeat or include ANY of these numbers/codes in the title, caption, or hook!
+- Instead, create a catchy, viral, human-like title and opening hook based on viral Shorts themes (Curiosity, Shock, Suspense, Entertainment).
+
 Platform Constraints:
 - YouTube Shorts Title MUST be strictly under 90 characters so "#Shorts" fits comfortably within YouTube's 100 character limit.
 - Instagram Reel Caption should be 200-500 characters, starting with the hook, followed by context, and ending with a CTA.
 - Opening hook: the first 3-second spoken or on-screen text to stop scrolling.
 - Hashtags: 5 to 10 relevant, non-repetitive tags starting with #.
-- Call To Action (CTA): 1 concise closing sentence (e.g., "Follow for daily tips!" / "चॅनेलला सबस्क्राईब करा!").
+- Call To Action (CTA): 1 concise closing sentence (e.g., "Follow for daily tips!" / "नवीन व्हिडिओंसाठी फॉलो करा!").
 
 You MUST return ONLY a valid JSON object matching this schema without any markdown formatting or commentary:
 {
@@ -285,70 +289,232 @@ You MUST return ONLY a valid JSON object matching this schema without any markdo
   }
 
   /**
-   * Deterministic rule-based heuristic metadata generator
-   * 100% offline, $0 cost, supports en, hi, mr
+   * Helper to detect if a filename is a generic camera timestamp, code, or raw numbers
+   * e.g., 'VID 20260801 191006 507', 'VID_20260801_191006_507.mp4', 'IMG_1234', '191006_507'
    */
-  generateHeuristicMetadata(videoData, language = 'en') {
-    const base = (videoData.cleanTitle || videoData.originalName || 'Trending Video')
-      .replace(/[_-]/g, ' ')
-      .replace(/\.[^/.]+$/, '')
-      .replace(/\b(mp4|mov|avi|mkv|wmv)\b/gi, '')
+  isCameraOrGenericFilename(filename = '') {
+    if (!filename) return true;
+    const stripped = String(filename)
+      .replace(/\.[a-zA-Z0-9]{2,5}$/, '')
+      .replace(/[_\s-]+/g, ' ')
       .trim();
 
-    // Capitalize words
-    const capitalized = base
-      .split(' ')
-      .filter(Boolean)
-      .map((w) => (w.length > 2 ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : w))
-      .join(' ') || 'Must Watch';
+    if (stripped.length <= 2) return true;
 
-    const words = base.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
-    const customTags = words.slice(0, 4).map((t) => `#${t.charAt(0).toUpperCase() + t.slice(1)}`);
-
-    if (language === 'hi') {
-      return {
-        youtubeTitle: `${capitalized} - ज़रूर देखें! 🚀 #Shorts`,
-        instagramCaption: `क्या आपने यह देखा? 👀\n\n${capitalized}\n\nयह वीडियो अंत तक देखें और अपनी राय कमेंट में बताएं! ऐसे और बेहतरीन वीडियो देखने के लिए हमें अभी फॉलो करें।`,
-        hook: `रुकिए! यह देखने से पहले स्क्रोल मत कीजिए...`,
-        description: `${capitalized} - इस शानदार वीडियो को देखें और शेयर करें।`,
-        cta: `ऐसे और वीडियो के लिए लाइक और सब्सक्राइब करें!`,
-        hashtags: ['#Shorts', '#Reels', '#Trending', '#HindiReels', '#ViralVideo', ...customTags].slice(0, 7),
-        tags: ['shorts', 'reels', 'hindi', 'viral', ...words.slice(0, 3)],
-        category: 'Entertainment',
-        provider: 'manual',
-        language: 'hi',
-        generatedAt: new Date(),
-      };
+    // Matches camera app prefixes like VID, IMG, PXL, MOV, DCIM, REC, CLIP, CAM, VIDEO, AUD, FILE, WHATSAPP
+    if (/^(vid|img|mov|pxl|dcim|clip|rec|cam|video|aud|file|whatsapp|snapchat)[_\s-]?\d+/i.test(stripped)) {
+      return true;
     }
 
-    if (language === 'mr') {
-      return {
-        youtubeTitle: `${capitalized} - नक्की बघा! 🚀 #Shorts`,
-        instagramCaption: `हे नक्की बघा! 💥\n\n${capitalized}\n\nहा व्हिडिओ शेवटपर्यंत पहा आणि मित्रांना शेअर करा! अशाच नवनवीन व्हिडिओंसाठी आजच फॉलो करा.`,
-        hook: `एक मिनिट थांबा! हा व्हिडिओ चुकवू नका...`,
-        description: `${capitalized} - हा व्हिडिओ पूर्ण पहा आणि आवडल्यास शेअर करा.`,
-        cta: `नवीन व्हिडिओंसाठी लाईक आणि फॉलो करायला विसरू नका!`,
-        hashtags: ['#Shorts', '#Reels', '#MarathiReels', '#Trending', '#Maharashtra', ...customTags].slice(0, 7),
-        tags: ['shorts', 'reels', 'marathi', 'viral', ...words.slice(0, 3)],
-        category: 'Entertainment',
-        provider: 'manual',
-        language: 'mr',
-        generatedAt: new Date(),
-      };
+    // Matches long numeric sequences / timestamps (e.g. 20260801 191006)
+    if (/\b\d{4,}\b/.test(stripped)) {
+      const nonDigits = stripped.replace(/[\d\s_-]+/g, '').trim();
+      if (!nonDigits || /^(vid|img|mov|pxl|dcim|clip|rec|cam|video|mp4|file)$/i.test(nonDigits)) {
+        return true;
+      }
     }
 
-    // Default English
+    // Ratio of digits to total letters
+    const digits = (stripped.match(/\d/g) || []).length;
+    const letters = (stripped.match(/[a-zA-Z]/g) || []).length;
+    if (digits >= 4 && digits >= letters * 0.35) {
+      return true;
+    }
+
+    // Purely numbers or generic placeholder words
+    if (/^\d+$/.test(stripped.replace(/\s+/g, ''))) return true;
+    if (/^(video|clip|short|reel|untitled|new video|sample|test|draft)$/i.test(stripped)) return true;
+
+    return false;
+  }
+
+  /**
+   * Deterministic rule-based heuristic metadata generator
+   * 100% offline, $0 cost, supports en, hi, mr with viral hook templates
+   */
+  generateHeuristicMetadata(videoData, language = 'en') {
+    const rawName = (videoData.cleanTitle || videoData.originalName || '').trim();
+    const isCamera = this.isCameraOrGenericFilename(rawName);
+
+    // Clean up folder name if it's meaningful
+    const rawFolder = (videoData.folderName || '').replace(/[_-]/g, ' ').trim();
+    const isGenericFolder = !rawFolder || /^(root|drive|my drive|general|videos|test|all|media|shorts|reels)$/i.test(rawFolder);
+    const folderTopic = !isGenericFolder
+      ? rawFolder.split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
+      : null;
+
+    // Clean up title if it's human-meaningful (not camera numbers)
+    let meaningfulTitle = null;
+    if (!isCamera && rawName) {
+      const base = rawName
+        .replace(/[_-]/g, ' ')
+        .replace(/\.[^/.]+$/, '')
+        .replace(/\b(mp4|mov|avi|mkv|wmv)\b/gi, '')
+        .trim();
+      meaningfulTitle = base
+        .split(' ')
+        .filter(Boolean)
+        .map((w) => (w.length > 2 ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : w))
+        .join(' ');
+    }
+
+    // Curated high-converting viral templates per language
+    const viralPools = {
+      mr: {
+        titles: [
+          'शेवटपर्यंत नक्की बघा, धक्का बसेल! 😱🔥',
+          'हे नक्की काय घडलं? डोळ्यांवर विश्वास बसणार नाही! 🤯💥',
+          'शेवटचा ट्विस्ट नक्की पहा! हसून हसून लोटपोट व्हाल 😂🔥',
+          'असा व्हिडिओ तुम्ही कधीच पाहिला नसेल! 😳✨',
+          'थांबा, एक मिनिट! हा व्हिडिओ नक्की बघा 🤫🚀',
+          'शेवटपर्यंत पहा, 100% मजा येईल! 😍🔥',
+          'हे बघून तुम्ही थक्क व्हाल! 🤯👀',
+          'एकदा नक्की बघा, मित्रांना लगेच शेअर करा! 💥🚀',
+          'खरंच असं घडतं? शेवटचा भाग नक्की बघा! 😱✨',
+          'हे कोणालाच माहीत नाही! रहस्य उघड 🤫💡',
+          'शेवटपर्यंत बघा, काय भारी आहे! 🤩🔥',
+          'हा व्हिडिओ पाहून थक्क व्हाल! 😱👀',
+        ],
+        folderTitleTemplates: [
+          '{topic}: शेवटपर्यंत नक्की बघा! 😱🔥',
+          '{topic}: हा व्हिडिओ चुकवू नका! 💥🚀',
+          '{topic}: शेवटचा ट्विस्ट थक्क करेल! 🤯✨',
+          'असा {topic} व्हिडिओ कधीच पाहिला नसेल! 😍🔥',
+        ],
+        captions: [
+          'हे नक्की बघा! 💥\n\nहा व्हिडिओ शेवटपर्यंत पहा आणि मित्रांना शेअर करा! अशाच नवनवीन आणि व्हायरल व्हिडिओंसाठी आजच फॉलो करा.\n\nतुम्हाला हा व्हिडिओ कसा वाटला? कमेंट मध्ये नक्की सांगा! 👇',
+          'असा व्हिडिओ पुन्हा दिसणार नाही! 👀🔥\n\nशेवटचा ट्विस्ट नक्की पहा आणि मित्रांना शेअर करा. रोज नवीन मनोरंजक व्हिडिओंसाठी पेजला फॉलो करायला विसरू नका!',
+          'एकदा बघाच! 🤩✨\n\nहा व्हिडिओ तुम्हाला आवडला तर लाईक करा आणि मित्रांना पाठवा. अशाच कमाल व्हिडिओंसाठी फॉलो करा!',
+          'शेवटपर्यंत नक्की बघा! 😱💥\n\nहा व्हिडिओ पाहून नक्कीच थक्क व्हाल. अशाच भन्नाट व्हिडिओंसाठी चॅनेलला सबस्क्राईब आणि फॉलो करा!',
+        ],
+        hooks: [
+          'एक मिनिट थांबा! हा व्हिडिओ चुकवू नका...',
+          'शेवटपर्यंत बघा, शेवटचा ट्विस्ट पाहून धक्का बसेल!',
+          'तुम्ही कधी असं काही पाहिलंय का?',
+          'थांबा! हे पाहिल्याशिवाय पुढे जाऊ नका...',
+          'हा व्हिडिओ पाहून तुमचा दिवस बनेल!',
+        ],
+        ctas: [
+          'नवीन आणि व्हायरल व्हिडिओंसाठी लाईक आणि फॉलो करा!',
+          'अशाच रोज नवीन व्हिडिओंसाठी आताच फॉलो करा!',
+          'व्हिडिओ आवडल्यास मित्रांना शेअर करा आणि सबस्क्राईब करा!',
+        ],
+        hashtags: ['#Shorts', '#Reels', '#MarathiReels', '#Trending', '#Maharashtra', '#ViralReels', '#MarathiKida'],
+        category: 'Entertainment',
+      },
+      hi: {
+        titles: [
+          'लास्ट तक ज़रूर देखना, होश उड़ जाएंगे! 😱🔥',
+          'यह क्या हुआ? अपनी आँखों पर भरोसा नहीं होगा! 🤯💥',
+          'रुको! इसे देखे बिना स्क्रोल मत करना... 🤫👀',
+          'लास्ट में जो हुआ देखकर चौंक जाओगे! 😳🔥',
+          'ऐसा वीडियो ज़िंदगी में नहीं देखा होगा! 🤯✨',
+          'हंस-हंस कर लोटपोट हो जाओगे! 😂💀',
+          'ये सच है या मज़ाक? खुद ही देख लो! 😱🚀',
+          'सबके होश उड़ा देने वाला वीडियो! 💥🔥',
+          'इसने तो सबका दिल जीत लिया! 😍✨',
+          'ये सीक्रेट कोई नहीं बताएगा! 🤫💡',
+          'लास्ट का सीन मिस मत करना! 😱👀',
+          'देखकर आप भी हैरान रह जाओगे! 🤯🔥',
+        ],
+        folderTitleTemplates: [
+          '{topic} | लास्ट तक ज़रूर देखना! 😱🔥',
+          '{topic} का सबसे धमाकेदार वीडियो! 💥🚀',
+          '{topic} का यह वीडियो देखकर चौंक जाओगे! 🤯✨',
+        ],
+        captions: [
+          'क्या आपने यह देखा? 👀🔥\n\nयह वीडियो अंत तक देखें और अपनी राय कमेंट में बताएं! ऐसे और बेहतरीन और वायरल वीडियो देखने के लिए हमें अभी फॉलो करें।',
+          'लास्ट का ट्विस्ट मिस मत करना! 😱✨\n\nअगर वीडियो पसंद आए तो लाइक करें और दोस्तों के साथ शेयर करें। रोज़ाना ऐसे ही नए वीडियो के लिए अभी फॉलो करें!',
+          'यह वीडियो सच में कमाल है! 😍🔥\n\nपूरा वीडियो देखें और अपने विचार नीचे कमेंट्स में शेयर करें। चैनल को सब्सक्राइब करना न भूलें!',
+        ],
+        hooks: [
+          'रुकिए! यह देखने से पहले स्क्रोल मत कीजिए...',
+          'लास्ट तक देखना, असली मज़ा लास्ट में है!',
+          'क्या आपने कभी ऐसा कुछ देखा है?',
+          'एक सेकंड रुको, यह वीडियो आपका दिन बना देगा!',
+        ],
+        ctas: [
+          'ऐसे और शानदार वीडियो के लिए लाइक और सब्सक्राइब करें!',
+          'डेली रील्स और शॉर्ट्स के लिए अभी फॉलो करें!',
+          'वीडियो पसंद आए तो शेयर और फॉलो ज़रूर करें!',
+        ],
+        hashtags: ['#Shorts', '#Reels', '#Trending', '#HindiReels', '#ViralVideo', '#ShortsFeed', '#Viral'],
+        category: 'Entertainment',
+      },
+      en: {
+        titles: [
+          'Wait Till The Very End! 😱🔥',
+          'You Won\'t Believe What Happened Next! 🤯✨',
+          'This Just Blew My Mind! 💥👀',
+          'Watch Till The End For The Twist! 😱🔥',
+          'Nobody Expected This To Happen! 🤯💀',
+          'Top Secret You Wish You Knew Sooner! 🤫💡',
+          'Try Not To Laugh Challenge! 😂🔥',
+          'Wait For It... Instant Shock! 😱🚀',
+          'This Changed Everything! 🚀💡',
+          'Most Satisfying Video Ever! 😍✨',
+          'Can You Believe This Really Happened?! 🤯🔥',
+          'Wait For The Unexpected Twist! 😳👀',
+        ],
+        folderTitleTemplates: [
+          '{topic} | Wait Till The End! 😱🔥',
+          'Unbelievable {topic} Moment You Must See! 🤯✨',
+          'Best {topic} Video On The Internet! 🚀🔥',
+        ],
+        captions: [
+          'Wait until you see this! 👀🔥\n\nWatch till the end and let us know your thoughts in the comments. Don\'t forget to share with a friend who needs to see this!\n\nFollow for more daily viral videos!',
+          'The twist at the end is unbelievable! 🤯💥\n\nHit like if this blew your mind, and drop a comment below. Follow for daily trending reels!',
+          'You won\'t believe this actually happened! 😱✨\n\nDouble tap if you loved it and make sure to share it with your friends. Follow for daily shorts!',
+        ],
+        hooks: [
+          'Wait until you see what happens next...',
+          'Don\'t scroll! You need to see this right now...',
+          'Watch till the end, you won\'t regret it!',
+          'Nobody was ready for what happened next...',
+        ],
+        ctas: [
+          'Subscribe and hit the bell icon for daily shorts!',
+          'Follow for daily entertaining reels and shorts!',
+          'Double tap if you liked this and follow for more!',
+        ],
+        hashtags: ['#Shorts', '#Reels', '#Viral', '#Trending', '#ShortsFeed', '#ViralShorts', '#ExplorePage'],
+        category: 'Entertainment',
+      },
+    };
+
+    const pool = viralPools[language] || viralPools.en;
+    const rand = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+    let chosenTitle = '';
+    if (meaningfulTitle) {
+      if (language === 'mr') chosenTitle = `${meaningfulTitle} - नक्की बघा! 🚀`;
+      else if (language === 'hi') chosenTitle = `${meaningfulTitle} - ज़रूर देखें! 🚀`;
+      else chosenTitle = `${meaningfulTitle} - Wait For The End! 🚀`;
+    } else if (folderTopic && Math.random() > 0.4) {
+      const template = rand(pool.folderTitleTemplates);
+      chosenTitle = template.replace('{topic}', folderTopic);
+    } else {
+      chosenTitle = rand(pool.titles);
+    }
+
+    const chosenCaption = rand(pool.captions);
+    const chosenHook = rand(pool.hooks);
+    const chosenCta = rand(pool.ctas);
+
+    const tags = pool.hashtags.map((h) => h.replace('#', '').toLowerCase());
+    if (folderTopic) tags.unshift(folderTopic.toLowerCase());
+
     return {
-      youtubeTitle: `${capitalized} 🚀 #Shorts`,
-      instagramCaption: `Wait until you see this! 👀\n\n${capitalized}\n\nWatch till the end and let us know your thoughts in the comments. Don't forget to share with a friend who needs to see this!`,
-      hook: `Wait until you see what happens next...`,
-      description: `Watch what happens in this clip! Don't forget to like, share, and follow for daily videos.`,
-      cta: `Subscribe and hit the bell icon for daily shorts!`,
-      hashtags: ['#Shorts', '#Reels', '#Viral', '#Trending', ...customTags].slice(0, 7),
-      tags: ['shorts', 'reels', 'viral', ...words.slice(0, 3)],
-      category: 'Entertainment',
+      youtubeTitle: chosenTitle,
+      instagramCaption: chosenCaption,
+      hook: chosenHook,
+      description: meaningfulTitle ? `${meaningfulTitle} - Watch till the end!` : chosenHook,
+      cta: chosenCta,
+      hashtags: pool.hashtags,
+      tags,
+      category: pool.category || 'Entertainment',
       provider: 'manual',
-      language: 'en',
+      language,
       generatedAt: new Date(),
     };
   }
@@ -362,10 +528,12 @@ You MUST return ONLY a valid JSON object matching this schema without any markdo
     if (!ytTitle.toLowerCase().includes('#shorts')) {
       if (ytTitle.length <= 91) {
         ytTitle = `${ytTitle} #Shorts`;
+      } else {
+        ytTitle = `${ytTitle.slice(0, 91).trim()} #Shorts`;
       }
     }
     if (ytTitle.length > 100) {
-      ytTitle = ytTitle.slice(0, 96).trim() + '...';
+      ytTitle = `${ytTitle.slice(0, 91).trim()} #Shorts`;
     }
 
     // 2. Instagram Reel Caption: Max 2200 characters

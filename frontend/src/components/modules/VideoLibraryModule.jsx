@@ -32,6 +32,20 @@ import {
   CheckCircle,
   Info,
   Cpu,
+  Plus,
+  ArrowUpDown,
+  Filter,
+  Monitor,
+  Tag,
+  PlayCircle,
+  Trash2,
+  Loader2,
+  Youtube,
+  Instagram,
+  Zap,
+  ChevronDown,
+  ChevronUp,
+  Send,
 } from 'lucide-react';
 import { Card, CardHeader } from '../common/Card.jsx';
 import { Button } from '../common/Button.jsx';
@@ -53,24 +67,106 @@ export function extractDriveFolderId(input) {
   return trimmed.split('?')[0].split('&')[0];
 }
 
+export function formatDuration(seconds) {
+  if (!seconds || isNaN(seconds) || seconds <= 0) return '0:00';
+  const sec = Math.round(seconds);
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+export const VideoThumbnail = ({ video, onPreview }) => {
+  const [imgError, setImgError] = useState(false);
+  const proxyUrl = `/api/videos/${video._id}/thumbnail`;
+  const [src, setSrc] = useState(proxyUrl);
+
+  return (
+    <div
+      onClick={onPreview}
+      className="group/thumb relative w-16 h-20 sm:w-20 sm:h-24 rounded-lg overflow-hidden bg-slate-900 border border-slate-800 shrink-0 flex items-center justify-center cursor-pointer hover:border-indigo-500/60 transition-colors shadow-xs select-none"
+      title="Click to preview video"
+    >
+      {!imgError ? (
+        <img
+          src={src}
+          alt=""
+          referrerPolicy="no-referrer"
+          onError={() => {
+            if (src !== video.thumbnailUrl && video.thumbnailUrl) {
+              setSrc(video.thumbnailUrl);
+            } else {
+              setImgError(true);
+            }
+          }}
+          className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform duration-200"
+          loading="lazy"
+        />
+      ) : (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 to-indigo-950/40 text-slate-500 group-hover/thumb:text-indigo-400 transition-colors">
+          <Film className="w-6 h-6" />
+        </div>
+      )}
+
+      {/* Hover Play Button Overlay */}
+      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center transition-opacity">
+        <PlayCircle className="w-7 h-7 text-white drop-shadow-md" />
+      </div>
+
+      {/* Overlaid Duration Badge */}
+      <span className="absolute bottom-1 right-1 bg-black/85 backdrop-blur-xs text-white text-[9px] font-mono px-1 py-0.5 rounded leading-none">
+        {formatDuration(video.duration)}
+      </span>
+
+      {/* 9:16 Vertical Pill Overlay */}
+      {video.resolution?.isVertical && (
+        <span className="absolute top-1 left-1 bg-indigo-600 text-white text-[8px] font-bold px-1 py-0.5 rounded leading-none shadow-xs">
+          9:16
+        </span>
+      )}
+    </div>
+  );
+};
+
 export const VideoLibraryModule = ({
   videos,
   pagination,
   onSearch,
   onFilterChange,
   onPageChange,
-  accounts,
+  accounts = [],
   onQueuePost,
   onReload,
 }) => {
-  // Search & Filter state
+  // Search, Filter & Understandable Sorting state
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [aspectFilter, setAspectFilter] = useState('');
   const [sizeFilter, setSizeFilter] = useState('');
+  const [approvalFilter, setApprovalFilter] = useState('');
+  const [selectedFolder, setSelectedFolder] = useState('');
   const [sortOption, setSortOption] = useState('modified_desc');
 
-  // Drive Connection & Folder state
+  // Google Drive Accounts & Folders state
+  const [selectedDriveAccount, setSelectedDriveAccount] = useState('all');
+  const [foldersList, setFoldersList] = useState([]);
+  const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
+  const [isRemovingDriveId, setIsRemovingDriveId] = useState(null);
+
+  // Quick Stats State (for interactive 1-click status ribbon)
+  const [libraryStats, setLibraryStats] = useState({
+    total: 0,
+    approved: 0,
+    draft: 0,
+    needsAi: 0,
+    vertical: 0,
+    queued: 0,
+    published: 0,
+  });
+
+  // In-app video preview player modal state
+  const [previewVideo, setPreviewVideo] = useState(null);
+
+  // Drive Connection & Folder sync state
   const [driveStatus, setDriveStatus] = useState(null);
   const [folderIdInput, setFolderIdInput] = useState('');
   const [isValidatingFolder, setIsValidatingFolder] = useState(false);
@@ -120,6 +216,12 @@ export const VideoLibraryModule = ({
     approvalStatus: 'draft',
   });
 
+  // AI Provider Configuration (Google Gemini Key)
+  const [showAiConfig, setShowAiConfig] = useState(false);
+  const [geminiKeyInput, setGeminiKeyInput] = useState('');
+  const [isConfiguringAi, setIsConfiguringAi] = useState(false);
+  const [aiConfigMsg, setAiConfigMsg] = useState(null);
+
   // Schedule modal state (multi-account selection)
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
   const [scheduleForm, setScheduleForm] = useState({
@@ -131,14 +233,31 @@ export const VideoLibraryModule = ({
     timezone: 'UTC',
   });
 
-  // Load Drive status, AI status, & sync progress on mount
-  const checkInitialStatus = useCallback(async () => {
+  // Batch Multi-Video Scheduling State
+  const [batchScheduleModalOpen, setBatchScheduleModalOpen] = useState(false);
+  const [isSubmittingBatchSchedule, setIsSubmittingBatchSchedule] = useState(false);
+  const [batchScheduleItems, setBatchScheduleItems] = useState([]);
+  const [globalBatchConfig, setGlobalBatchConfig] = useState({
+    selectedAccountIds: [],
+    startDateTime: '',
+    intervalMinutes: 120, // 2 hours default gap
+    timezone: 'Asia/Kolkata',
+    allowDuplicate: false,
+  });
+
+  // Load Drive status, AI status, folders & sync progress on mount
+  const checkInitialStatus = useCallback(async (targetAccountId = null) => {
     try {
-      const [driveRes, progressRes, aiRes, bulkRes] = await Promise.all([
+      const accId = targetAccountId !== null ? targetAccountId : selectedDriveAccount;
+      const accountFilter = accId && accId !== 'all' ? { accountId: accId } : {};
+
+      const [driveRes, progressRes, aiRes, bulkRes, foldersRes, statsRes] = await Promise.all([
         api.getDriveStatus().catch(() => ({ data: { connected: false } })),
         api.getSyncProgress().catch(() => ({ data: null })),
         api.getAiStatus().catch(() => ({ data: null })),
         api.getBulkAiProgress().catch(() => ({ data: null })),
+        api.getVideoFoldersSummary(accountFilter).catch(() => ({ data: [] })),
+        api.getVideoStats(accountFilter).catch(() => ({ data: null })),
       ]);
 
       setDriveStatus(driveRes.data);
@@ -148,14 +267,66 @@ export const VideoLibraryModule = ({
       setSyncProgress(progressRes.data);
       setAiStatus(aiRes.data);
       setBulkProgress(bulkRes.data);
+      if (foldersRes.data && Array.isArray(foldersRes.data)) {
+        setFoldersList(foldersRes.data);
+      }
+      if (statsRes?.data) {
+        setLibraryStats(statsRes.data);
+      }
     } catch (err) {
       console.error('[VideoLibraryModule] Error checking status:', err);
     }
-  }, [folderIdInput]);
+  }, [folderIdInput, selectedDriveAccount]);
 
   useEffect(() => {
     checkInitialStatus();
   }, [checkInitialStatus]);
+
+  // Connect another Google Drive account handler
+  const handleConnectGoogleDrive = async () => {
+    try {
+      setIsConnectingGoogle(true);
+      const res = await api.getGoogleAuthUrl();
+      if (res?.authUrl) {
+        window.location.href = res.authUrl;
+      } else {
+        alert('Could not retrieve Google authorization URL. Please check backend configuration.');
+      }
+    } catch (err) {
+      alert(`Failed to start Google Drive connection: ${err.message}`);
+    } finally {
+      setIsConnectingGoogle(false);
+    }
+  };
+
+  // Remove / Disconnect a Google Drive account
+  const handleRemoveGoogleDrive = async (e, acc) => {
+    e.stopPropagation();
+    const driveName = acc.accountName || acc.googleEmail || 'Google Drive';
+    const confirm = window.confirm(
+      `Are you sure you want to remove and disconnect Google Drive "${driveName}"?\n\nThis will remove this drive and all associated video catalog items.`
+    );
+    if (!confirm) return;
+
+    try {
+      setIsRemovingDriveId(acc._id);
+      try {
+        await api.deleteAccount(acc._id);
+      } catch {
+        await api.disconnectAccount(acc._id);
+      }
+      if (selectedDriveAccount === acc._id) {
+        setSelectedDriveAccount('all');
+        handleFilterUpdate({ accountId: '' });
+      }
+      await checkInitialStatus('all');
+      if (onReload) onReload();
+    } catch (err) {
+      alert(`Failed to remove Google Drive: ${err.message}`);
+    } finally {
+      setIsRemovingDriveId(null);
+    }
+  };
 
   // Polling Drive sync progress when active
   useEffect(() => {
@@ -258,7 +429,10 @@ export const VideoLibraryModule = ({
       search: searchQuery,
       status: statusFilter,
       isVertical: aspectFilter,
+      approvalStatus: approvalFilter,
+      folderId: selectedFolder,
       sort: sortOption,
+      accountId: selectedDriveAccount === 'all' ? '' : selectedDriveAccount,
       ...newFilters,
     };
 
@@ -276,6 +450,10 @@ export const VideoLibraryModule = ({
         combined.minSize = '';
         combined.maxSize = '';
       }
+    }
+
+    if (newFilters.accountId !== undefined) {
+      checkInitialStatus(newFilters.accountId);
     }
 
     onFilterChange(combined);
@@ -303,14 +481,52 @@ export const VideoLibraryModule = ({
     }
   };
 
+  // Save Google Gemini API Key and test connection
+  const handleSaveGeminiKey = async (e) => {
+    if (e) e.preventDefault();
+    if (!geminiKeyInput.trim()) {
+      alert('Please enter your Google Gemini API key');
+      return;
+    }
+    try {
+      setIsConfiguringAi(true);
+      setAiConfigMsg(null);
+      const res = await api.configureAi({ geminiApiKey: geminiKeyInput.trim() });
+      if (res.data?.connected) {
+        setAiConfigMsg({ type: 'success', text: 'Google Gemini AI connected successfully! 🚀' });
+        setDraftForm((prev) => ({ ...prev, provider: 'gemini' }));
+        handleGenerateAi();
+      } else {
+        setAiConfigMsg({ type: 'error', text: res.data?.error || res.data?.message || 'Connection failed' });
+      }
+    } catch (err) {
+      setAiConfigMsg({ type: 'error', text: err.message });
+    } finally {
+      setIsConfiguringAi(false);
+    }
+  };
+
   // Open single AI generator modal
   const openAiGenerator = (video) => {
     setSelectedVideo(video);
     const meta = video.aiMetadata || {};
     const lang = meta.language || 'en';
     setSingleLanguage(lang);
+    setAiConfigMsg(null);
+
+    const isCamera = (name) => {
+      if (!name) return true;
+      const stripped = String(name).replace(/\.[^/.]+$/, '').trim();
+      return /^(vid|img|mov|pxl|dcim|clip|rec|cam|video)[_\s-]?\d+/i.test(stripped) || /\b\d{5,}\b/.test(stripped);
+    };
+
+    let initialTitle = meta.youtubeTitle || meta.generatedTitle || '';
+    if (!initialTitle && !isCamera(video.cleanTitle || video.originalName)) {
+      initialTitle = video.cleanTitle || video.originalName;
+    }
+
     setDraftForm({
-      youtubeTitle: meta.youtubeTitle || meta.generatedTitle || video.cleanTitle || video.originalName,
+      youtubeTitle: initialTitle,
       instagramCaption: meta.instagramCaption || meta.description || '',
       hook: meta.hook || '',
       description: meta.description || '',
@@ -399,15 +615,24 @@ export const VideoLibraryModule = ({
     }
   };
 
-  // Start Bulk AI generation
-  const handleStartBulkAi = async () => {
+  // Start Bulk AI generation or regeneration
+  const handleStartBulkAi = async (forceRegenerate = false) => {
     if (selectedVideoIds.length === 0) return;
+
+    if (forceRegenerate) {
+      const langLabel =
+        bulkLanguage === 'mr' ? 'मराठी (Marathi)' : bulkLanguage === 'hi' ? 'हिंदी (Hindi)' : 'English';
+      const confirmMsg = `Regenerate AI content for ${selectedVideoIds.length} video(s) in ${langLabel}?\n\nThis will re-run the AI pipeline and create fresh titles, hooks, descriptions, and hashtags for all selected videos.`;
+      if (!window.confirm(confirmMsg)) return;
+    }
+
     try {
       setIsStartingBulk(true);
       const res = await api.startBulkAi({
         videoIds: selectedVideoIds,
         language: bulkLanguage,
         concurrency: 2,
+        retryFailedOnly: false,
       });
       setBulkModalOpen(true);
       const progRes = await api.getBulkAiProgress(res.data.jobId);
@@ -549,6 +774,202 @@ export const VideoLibraryModule = ({
     }
   };
 
+  // Open Multi-Video Batch Schedule Modal
+  const openBatchScheduleModal = () => {
+    if (selectedVideoIds.length === 0) return;
+    const selectedObjs = videos.filter((v) => selectedVideoIds.includes(v._id));
+    if (selectedObjs.length === 0) return;
+
+    const connectedAccounts = accounts.filter((a) => a.status === 'connected');
+    const defaultAccountIds = connectedAccounts.map((a) => a._id);
+
+    // Default start time: today + 1 hour rounded to nearest 15 mins
+    const start = new Date(Date.now() + 60 * 60 * 1000);
+    start.setMinutes(Math.ceil(start.getMinutes() / 15) * 15, 0, 0);
+    const startLocal = new Date(start.getTime() - start.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+
+    const defaultIntervalMinutes = 120; // 2 hours default gap
+
+    const items = selectedObjs.map((video, idx) => {
+      const itemDate = new Date(start.getTime() + idx * defaultIntervalMinutes * 60 * 1000);
+      const itemLocal = new Date(itemDate.getTime() - itemDate.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      const aiMeta = video.aiMetadata || {};
+
+      return {
+        videoId: video._id,
+        video,
+        title: aiMeta.youtubeTitle || aiMeta.generatedTitle || video.cleanTitle || video.originalName,
+        caption: aiMeta.instagramCaption || video.cleanTitle || '',
+        hashtags: Array.isArray(aiMeta.hashtags)
+          ? aiMeta.hashtags.join(' ')
+          : aiMeta.hashtags || '#Shorts #Reels #Viral',
+        selectedAccountIds: [...defaultAccountIds],
+        scheduledAt: itemLocal,
+        allowDuplicate: false,
+        isExpanded: false,
+      };
+    });
+
+    setGlobalBatchConfig({
+      selectedAccountIds: [...defaultAccountIds],
+      startDateTime: startLocal,
+      intervalMinutes: defaultIntervalMinutes,
+      timezone: 'Asia/Kolkata',
+      allowDuplicate: false,
+    });
+
+    setBatchScheduleItems(items);
+    setBatchScheduleModalOpen(true);
+  };
+
+  const applyAutoStagger = (customStart = null, customInterval = null) => {
+    const startTimeStr = customStart || globalBatchConfig.startDateTime;
+    const intervalMins = customInterval !== null ? customInterval : parseInt(globalBatchConfig.intervalMinutes, 10);
+    if (!startTimeStr) return;
+
+    const startDate = new Date(startTimeStr);
+    setBatchScheduleItems((prev) =>
+      prev.map((item, idx) => {
+        const itemDate = new Date(startDate.getTime() + idx * intervalMins * 60 * 1000);
+        const itemLocal = new Date(itemDate.getTime() - itemDate.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+        return {
+          ...item,
+          scheduledAt: itemLocal,
+        };
+      })
+    );
+  };
+
+  const applyGlobalAccountsToAll = (accountIds) => {
+    setGlobalBatchConfig((prev) => ({ ...prev, selectedAccountIds: accountIds }));
+    setBatchScheduleItems((prev) =>
+      prev.map((item) => ({
+        ...item,
+        selectedAccountIds: [...accountIds],
+      }))
+    );
+  };
+
+  const toggleItemAccount = (index, accountId) => {
+    setBatchScheduleItems((prev) => {
+      const next = [...prev];
+      const cur = next[index].selectedAccountIds || [];
+      next[index] = {
+        ...next[index],
+        selectedAccountIds: cur.includes(accountId)
+          ? cur.filter((id) => id !== accountId)
+          : [...cur, accountId],
+      };
+      return next;
+    });
+  };
+
+  const updateBatchItem = (index, field, value) => {
+    setBatchScheduleItems((prev) => {
+      const next = [...prev];
+      next[index] = {
+        ...next[index],
+        [field]: value,
+      };
+      return next;
+    });
+  };
+
+  const removeBatchItem = (index) => {
+    setBatchScheduleItems((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const selectAllApproved = () => {
+    const approvedIds = videos
+      .filter((v) => v.aiMetadata?.approvalStatus === 'approved')
+      .map((v) => v._id);
+    if (approvedIds.length === 0) {
+      alert('No approved videos found on this page. Generate AI metadata or approve drafts first.');
+      return;
+    }
+    setSelectedVideoIds(approvedIds);
+  };
+
+  const handleSubmitBatchSchedule = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (batchScheduleItems.length === 0) {
+      alert('Please select at least one video to schedule.');
+      return;
+    }
+
+    for (let i = 0; i < batchScheduleItems.length; i++) {
+      const item = batchScheduleItems[i];
+      if (!item.selectedAccountIds || item.selectedAccountIds.length === 0) {
+        alert(
+          `Video #${i + 1} ("${item.title.slice(0, 30)}...") has no target channels selected.\n` +
+          `Please select at least one channel for this video or remove it from the batch.`
+        );
+        return;
+      }
+      if (!item.scheduledAt) {
+        alert(`Video #${i + 1} ("${item.title.slice(0, 30)}...") has no scheduled time set.`);
+        return;
+      }
+    }
+
+    const payload = batchScheduleItems.map((item) => {
+      const targets = item.selectedAccountIds.map((accId) => {
+        const acc = accounts.find((a) => a._id === accId);
+        return {
+          accountId: accId,
+          platform: acc?.platform || 'youtube',
+          allowDuplicate: Boolean(item.allowDuplicate || globalBatchConfig.allowDuplicate),
+        };
+      });
+
+      return {
+        videoId: item.videoId,
+        targets,
+        title: item.title,
+        caption: item.caption,
+        hashtags: Array.isArray(item.hashtags)
+          ? item.hashtags
+          : String(item.hashtags || '').split(/[\s,]+/).filter(Boolean),
+        scheduledAt: new Date(item.scheduledAt).toISOString(),
+        timezone: globalBatchConfig.timezone || 'UTC',
+        allowDuplicate: Boolean(item.allowDuplicate || globalBatchConfig.allowDuplicate),
+        autoApprove: true,
+      };
+    });
+
+    try {
+      setIsSubmittingBatchSchedule(true);
+      const res = await api.batchSchedule(payload);
+      const scheduledCount = res.data?.totalScheduled || 0;
+      const videosCount = batchScheduleItems.length;
+      const errorCount = res.data?.errors?.length || 0;
+
+      if (errorCount > 0) {
+        const errDetails = res.data.errors.map((er) => `- ${er.error}`).slice(0, 5).join('\n');
+        alert(
+          `Batch Scheduled ${scheduledCount} post(s) across ${videosCount} video(s).\n` +
+          `Encountered ${errorCount} issue(s):\n${errDetails}`
+        );
+      } else {
+        alert(
+          `🎉 Batch Scheduling Successful!\n\n` +
+          `• ${videosCount} video(s) scheduled\n` +
+          `• ${scheduledCount} publishing job(s) queued across your channels!\n\n` +
+          `Each video will automatically publish at its assigned scheduled time.`
+        );
+      }
+
+      setBatchScheduleModalOpen(false);
+      setSelectedVideoIds([]);
+      if (onReload) onReload();
+      if (onQueuePost) onQueuePost();
+    } catch (err) {
+      alert(`Batch Schedule Failed: ${err.message}`);
+    } finally {
+      setIsSubmittingBatchSchedule(false);
+    }
+  };
+
   const formatBytes = (bytes) => {
     if (!bytes || bytes === 0) return '0 B';
     const k = 1024;
@@ -568,105 +989,194 @@ export const VideoLibraryModule = ({
 
   const allPageIds = videos.map((v) => v._id);
   const isAllPageSelected = videos.length > 0 && allPageIds.every((id) => selectedVideoIds.includes(id));
+  const googleAccounts = (accounts || []).filter((a) => a.platform === 'youtube' && !a.isDemo);
 
   return (
     <div className="space-y-6">
-      {/* 1. Google Drive & AI Provider Diagnostic Status Bar */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Drive Status */}
-        <Card>
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-start gap-3">
-              <div
-                className={`w-9 h-9 rounded-xl flex items-center justify-center border shrink-0 ${
-                  driveStatus?.connected
-                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                    : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                }`}
-              >
-                <HardDrive className="w-4 h-4" />
+      {/* 1. Google Drive Multi-Account & Folder Management */}
+      <Card className="border-indigo-500/20 bg-gradient-to-r from-slate-900/90 via-indigo-950/20 to-slate-900/90 shadow-sm">
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500/20 to-emerald-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
+                <HardDrive className="w-5 h-5" />
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h3 className="text-xs font-semibold text-slate-100">Google Drive Library</h3>
-                  <Badge variant={driveStatus?.connected ? 'success' : 'warning'} dot className="text-[10px]">
-                    {driveStatus?.connected ? 'Drive Connected' : 'Auth Required'}
+                  <h3 className="text-sm font-semibold text-slate-100">Connected Google Drives</h3>
+                  <Badge variant={googleAccounts.length > 0 ? 'success' : 'warning'} dot className="text-[10px]">
+                    {googleAccounts.length > 0 ? `${googleAccounts.length} Drive${googleAccounts.length > 1 ? 's' : ''} Connected` : 'No Drive Connected'}
                   </Badge>
                 </div>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  {driveStatus?.connected
-                    ? `Indexed for 20,000+ files (${driveStatus.user?.emailAddress || 'Ready'})`
-                    : 'Connect Google account to discover Drive videos.'}
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Connect separate Google Drive accounts to catalog, organize, and publish video reels independently.
                 </p>
               </div>
             </div>
 
-            <Button
-              variant="secondary"
-              size="sm"
-              icon={FolderSync}
-              onClick={() => setSyncConfigOpen(!syncConfigOpen)}
-              className="text-xs py-1"
-            >
-              Sync Config
-            </Button>
-          </div>
-        </Card>
-
-        {/* AI Provider Status */}
-        <Card>
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-start gap-3">
-              <div
-                className={`w-9 h-9 rounded-xl flex items-center justify-center border shrink-0 ${
-                  aiStatus?.connected
-                    ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
-                    : 'bg-slate-800 text-slate-400 border-slate-700'
-                }`}
-              >
-                <Cpu className="w-4 h-4" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-xs font-semibold text-slate-100">AI Provider Engine</h3>
-                  <Badge
-                    variant={aiStatus?.connected ? 'info' : aiStatus?.provider === 'manual' ? 'neutral' : 'warning'}
-                    dot
-                    className="text-[10px] capitalize"
-                  >
-                    {aiStatus?.provider || 'Manual Fallback'}
-                  </Badge>
-                </div>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  {aiStatus?.provider === 'gemini'
-                    ? aiStatus.connected
-                      ? `Google Gemini Free Tier (${aiStatus.model || 'gemini-1.5-flash'})`
-                      : 'Gemini Key Not Configured (Using Deterministic Heuristic Fallback)'
-                    : aiStatus?.provider === 'ollama'
-                    ? aiStatus.connected
-                      ? `Local Ollama (${aiStatus.targetModel})`
-                      : 'Ollama Offline (Using Heuristic Fallback)'
-                    : 'Deterministic Heuristic Fallback ($0 cost, 100% offline, multilingual)'}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
               <Button
-                variant="ghost"
+                variant="primary"
                 size="sm"
-                icon={RefreshCw}
-                onClick={async () => {
-                  const res = await api.getAiStatus();
-                  setAiStatus(res.data);
-                }}
+                icon={Plus}
+                isLoading={isConnectingGoogle}
+                onClick={handleConnectGoogleDrive}
+                className="text-xs bg-indigo-600 hover:bg-indigo-500 shadow-sm font-medium"
+              >
+                + Connect Another Google Drive
+              </Button>
+
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={FolderSync}
+                onClick={() => setSyncConfigOpen(!syncConfigOpen)}
                 className="text-xs py-1"
-                title="Refresh Provider Status"
-              />
+              >
+                {syncConfigOpen ? 'Hide Sync Settings' : 'Sync / Index Folders'}
+              </Button>
             </div>
           </div>
-        </Card>
-      </div>
+
+          {/* Drive Accounts: Displayed separately */}
+          {googleAccounts.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
+              {googleAccounts.map((acc) => {
+                const isSelected = selectedDriveAccount === acc._id;
+                const hasDriveScope = acc.scopes?.some((s) => s.includes('drive'));
+                return (
+                  <div
+                    key={acc._id}
+                    onClick={() => {
+                      const next = isSelected ? 'all' : acc._id;
+                      setSelectedDriveAccount(next);
+                      handleFilterUpdate({ accountId: next === 'all' ? '' : next });
+                    }}
+                    className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                      isSelected
+                        ? 'bg-indigo-950/50 border-indigo-500/70 ring-1 ring-indigo-500/40 shadow-sm'
+                        : 'bg-slate-950/60 border-slate-800/80 hover:border-slate-700/80'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      {acc.profilePictureUrl ? (
+                        <img
+                          src={acc.profilePictureUrl}
+                          alt={acc.accountName}
+                          className="w-9 h-9 rounded-full object-cover border border-slate-700 shrink-0"
+                        />
+                      ) : (
+                        <div className="w-9 h-9 rounded-full bg-indigo-900/50 border border-indigo-700/50 flex items-center justify-center text-xs font-semibold text-indigo-300 shrink-0">
+                          {acc.accountName?.charAt(0)?.toUpperCase() || 'G'}
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-semibold text-slate-100 truncate block">
+                            {acc.accountName}
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-400 truncate block font-mono">
+                          {acc.googleEmail || 'Google Drive Connected'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0 flex items-center gap-2">
+                      <div className="flex flex-col items-end gap-1">
+                        <span
+                          className={`w-2.5 h-2.5 rounded-full ${
+                            acc.status === 'connected' ? 'bg-emerald-400 shadow-xs shadow-emerald-500/50' : 'bg-amber-400'
+                          }`}
+                          title={acc.status === 'connected' ? 'Account Active & Connected' : 'Authorization Needed'}
+                        />
+                        <span className="text-[9px] text-slate-500 font-mono">
+                          {hasDriveScope ? 'Drive Read' : 'OAuth'}
+                        </span>
+                      </div>
+
+                      {/* Remove / Disconnect Drive button */}
+                      <button
+                        type="button"
+                        disabled={isRemovingDriveId === acc._id}
+                        onClick={(e) => handleRemoveGoogleDrive(e, acc)}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-950/50 border border-transparent hover:border-rose-800/40 transition-colors ml-1"
+                        title={`Remove / Disconnect Google Drive (${acc.accountName})`}
+                      >
+                        {isRemovingDriveId === acc._id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-400" />
+                        ) : (
+                          <Trash2 className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="p-4 rounded-xl bg-slate-950/40 border border-dashed border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="text-xs text-slate-400 text-center sm:text-left">
+                No Google Drive connected yet. Connect your Google account to discover and index video reels automatically.
+              </div>
+              <Button
+                variant="primary"
+                size="sm"
+                icon={Plus}
+                isLoading={isConnectingGoogle}
+                onClick={handleConnectGoogleDrive}
+                className="text-xs"
+              >
+                Connect Google Drive Now
+              </Button>
+            </div>
+          )}
+
+          {/* Folder Filter Chips (if distinct folders discovered) */}
+          {foldersList.length > 0 && (
+            <div className="pt-2 border-t border-slate-800/60 flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-[11px] text-slate-400 font-medium flex items-center gap-1">
+                <Folder className="w-3.5 h-3.5 text-indigo-400" />
+                Drive Folders:
+              </span>
+              <button
+                onClick={() => {
+                  setSelectedFolder('');
+                  handleFilterUpdate({ folderId: '' });
+                }}
+                className={`px-2.5 py-1 rounded-lg text-xs transition-colors ${
+                  !selectedFolder
+                    ? 'bg-indigo-600 text-white font-medium shadow-xs'
+                    : 'bg-slate-950 text-slate-300 border border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                All Folders
+              </button>
+              {foldersList.map((f) => {
+                const isActive = selectedFolder === f._id;
+                return (
+                  <button
+                    key={f._id}
+                    onClick={() => {
+                      const next = isActive ? '' : f._id;
+                      setSelectedFolder(next);
+                      handleFilterUpdate({ folderId: next });
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-xs transition-colors flex items-center gap-1.5 ${
+                      isActive
+                        ? 'bg-indigo-600 text-white font-medium shadow-xs'
+                        : 'bg-slate-950 text-slate-300 border border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    <span>{f.folderName || 'Unnamed Folder'}</span>
+                    <span className="text-[10px] opacity-70">({f.count})</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </Card>
 
       {/* Expandable Drive Folder Configuration Panel */}
       {syncConfigOpen && (
@@ -742,38 +1252,19 @@ export const VideoLibraryModule = ({
                           variant="secondary"
                           size="sm"
                           icon={RefreshCw}
-                          onClick={async () => {
-                            const res = await api.getGoogleAuthUrl();
-                            if (res.authUrl) window.location.href = res.authUrl;
-                          }}
+                          onClick={handleConnectGoogleDrive}
                           className="text-xs text-amber-300 border-amber-500/30"
                         >
                           Reconnect Google Account with Drive Scopes
                         </Button>
                       </div>
                     )}
-                    {!folderValidation.success && folderValidation.error?.includes('Google Drive API is disabled') && (
-                      <div className="pt-1">
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          icon={ExternalLink}
-                          onClick={() =>
-                            window.open(
-                              'https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=702701632845',
-                              '_blank',
-                              'noopener,noreferrer'
-                            )
-                          }
-                          className="text-xs text-amber-300 border-amber-500/30"
-                        >
-                          Enable Google Drive API in Google Cloud Console
-                        </Button>
-                      </div>
-                    )}
                   </div>
                 </div>
-                <button onClick={() => setFolderValidation(null)} className="text-slate-400 hover:text-slate-200 self-start sm:self-center">
+                <button
+                  onClick={() => setFolderValidation(null)}
+                  className="text-slate-400 hover:text-slate-200 self-start sm:self-center"
+                >
                   &times;
                 </button>
               </div>
@@ -859,100 +1350,363 @@ export const VideoLibraryModule = ({
         </Card>
       )}
 
-      {/* 3. Search and Multi-Filter Controls */}
+      {/* 2.5 Interactive Video Library Stats Ribbon (High Clarity & Understandability) */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+        <button
+          type="button"
+          onClick={() => {
+            setApprovalFilter('');
+            setStatusFilter('');
+            setAspectFilter('');
+            handleFilterUpdate({ approvalStatus: '', status: '', isVertical: '' });
+          }}
+          className={`p-3 rounded-xl border text-left transition-all ${
+            !approvalFilter && !statusFilter && !aspectFilter
+              ? 'bg-indigo-950/40 border-indigo-500/70 shadow-sm ring-1 ring-indigo-500/40'
+              : 'bg-slate-900/50 border-slate-800/80 hover:border-slate-700'
+          }`}
+        >
+          <div className="flex items-center justify-between text-slate-400 text-xs">
+            <span>Total Catalog</span>
+            <Film className="w-3.5 h-3.5 text-indigo-400" />
+          </div>
+          <div className="text-lg font-bold text-slate-100 mt-1">
+            {libraryStats ? libraryStats.total?.toLocaleString() : pagination?.total?.toLocaleString() || 0}
+          </div>
+          <span className="text-[10px] text-slate-500 block truncate">All drive indexed</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            const next = approvalFilter === 'approved' ? '' : 'approved';
+            setApprovalFilter(next);
+            handleFilterUpdate({ approvalStatus: next });
+          }}
+          className={`p-3 rounded-xl border text-left transition-all ${
+            approvalFilter === 'approved'
+              ? 'bg-emerald-950/40 border-emerald-500/70 shadow-sm ring-1 ring-emerald-500/40'
+              : 'bg-slate-900/50 border-slate-800/80 hover:border-slate-700'
+          }`}
+        >
+          <div className="flex items-center justify-between text-emerald-400 text-xs">
+            <span>Approved AI</span>
+            <CheckCircle className="w-3.5 h-3.5" />
+          </div>
+          <div className="text-lg font-bold text-emerald-300 mt-1">
+            {libraryStats?.approved?.toLocaleString() ?? '—'}
+          </div>
+          <span className="text-[10px] text-emerald-400/70 block truncate">Ready to schedule</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            const next = approvalFilter === 'draft' ? '' : 'draft';
+            setApprovalFilter(next);
+            handleFilterUpdate({ approvalStatus: next });
+          }}
+          className={`p-3 rounded-xl border text-left transition-all ${
+            approvalFilter === 'draft'
+              ? 'bg-amber-950/40 border-amber-500/70 shadow-sm ring-1 ring-amber-500/40'
+              : 'bg-slate-900/50 border-slate-800/80 hover:border-slate-700'
+          }`}
+        >
+          <div className="flex items-center justify-between text-amber-400 text-xs">
+            <span>Draft AI</span>
+            <Clock className="w-3.5 h-3.5" />
+          </div>
+          <div className="text-lg font-bold text-amber-300 mt-1">
+            {libraryStats?.draft?.toLocaleString() ?? '—'}
+          </div>
+          <span className="text-[10px] text-amber-400/70 block truncate">Needs quick review</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            const next = approvalFilter === 'none' ? '' : 'none';
+            setApprovalFilter(next);
+            handleFilterUpdate({ approvalStatus: next });
+          }}
+          className={`p-3 rounded-xl border text-left transition-all ${
+            approvalFilter === 'none'
+              ? 'bg-purple-950/40 border-purple-500/70 shadow-sm ring-1 ring-purple-500/40'
+              : 'bg-slate-900/50 border-slate-800/80 hover:border-slate-700'
+          }`}
+        >
+          <div className="flex items-center justify-between text-purple-400 text-xs">
+            <span>Needs AI</span>
+            <Sparkles className="w-3.5 h-3.5" />
+          </div>
+          <div className="text-lg font-bold text-purple-300 mt-1">
+            {libraryStats?.needsAi?.toLocaleString() ?? '—'}
+          </div>
+          <span className="text-[10px] text-purple-400/70 block truncate">No title / tags yet</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            const next = aspectFilter === 'true' ? '' : 'true';
+            setAspectFilter(next);
+            handleFilterUpdate({ isVertical: next });
+          }}
+          className={`p-3 rounded-xl border text-left transition-all ${
+            aspectFilter === 'true'
+              ? 'bg-indigo-950/40 border-indigo-500/70 shadow-sm ring-1 ring-indigo-500/40'
+              : 'bg-slate-900/50 border-slate-800/80 hover:border-slate-700'
+          }`}
+        >
+          <div className="flex items-center justify-between text-indigo-400 text-xs">
+            <span>9:16 Vertical</span>
+            <Smartphone className="w-3.5 h-3.5" />
+          </div>
+          <div className="text-lg font-bold text-indigo-300 mt-1">
+            {libraryStats?.vertical?.toLocaleString() ?? '—'}
+          </div>
+          <span className="text-[10px] text-indigo-400/70 block truncate">Shorts & Reels</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            const next = statusFilter === 'queued' ? '' : 'queued';
+            setStatusFilter(next);
+            handleFilterUpdate({ status: next });
+          }}
+          className={`p-3 rounded-xl border text-left transition-all ${
+            statusFilter === 'queued'
+              ? 'bg-cyan-950/40 border-cyan-500/70 shadow-sm ring-1 ring-cyan-500/40'
+              : 'bg-slate-900/50 border-slate-800/80 hover:border-slate-700'
+          }`}
+        >
+          <div className="flex items-center justify-between text-cyan-400 text-xs">
+            <span>Queued</span>
+            <Calendar className="w-3.5 h-3.5" />
+          </div>
+          <div className="text-lg font-bold text-cyan-300 mt-1">
+            {libraryStats?.queued?.toLocaleString() ?? '—'}
+          </div>
+          <span className="text-[10px] text-cyan-400/70 block truncate">Scheduled to post</span>
+        </button>
+      </div>
+
+      {/* 3. Search, Quick Filters & Understandable Sorting Bar */}
       <Card>
         <div className="space-y-3">
-          <form onSubmit={handleSearchSubmit} className="relative">
-            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search 20,000+ videos by filename, clean title, or keywords..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-10 pr-24 py-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500/60"
-            />
-            <button
-              type="submit"
-              className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition-colors"
-            >
-              Search
-            </button>
-          </form>
+          {/* Top row: Search input & Understandable Sort Dropdown */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <form onSubmit={handleSearchSubmit} className="relative flex-1">
+              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search videos by title, original filename, or tags..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-10 pr-24 py-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500/60"
+              />
+              <button
+                type="submit"
+                className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition-colors"
+              >
+                Search
+              </button>
+            </form>
 
-          <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
-            <select
-              value={statusFilter}
-              onChange={(e) => {
-                setStatusFilter(e.target.value);
-                handleFilterUpdate({ status: e.target.value });
-              }}
-              className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-300 focus:outline-none"
-            >
-              <option value="">All Statuses</option>
-              <option value="discovered">Discovered</option>
-              <option value="metadata_ready">Metadata Ready</option>
-              <option value="queued">Queued</option>
-              <option value="published">Published</option>
-            </select>
+            {/* Clear, Understandable Sort Dropdown */}
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs text-slate-400 font-medium flex items-center gap-1">
+                <ArrowUpDown className="w-3.5 h-3.5 text-indigo-400" />
+                Sort:
+              </span>
+              <select
+                value={sortOption}
+                onChange={(e) => {
+                  setSortOption(e.target.value);
+                  handleFilterUpdate({ sort: e.target.value });
+                }}
+                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500/60 cursor-pointer font-medium"
+              >
+                <option value="modified_desc">🕒 Newest on Drive (Recently Added)</option>
+                <option value="modified_asc">⏳ Oldest on Drive</option>
+                <option value="name_asc">🔤 Title: A to Z (Alphabetical)</option>
+                <option value="name_desc">🔤 Title: Z to A</option>
+                <option value="duration_desc">⏱️ Duration: Longest First</option>
+                <option value="duration_asc">⏱️ Duration: Shortest First</option>
+                <option value="size_desc">💾 File Size: Largest First</option>
+                <option value="size_asc">💾 File Size: Smallest First</option>
+                <option value="approval_status">⭐ AI Status: Approved First</option>
+              </select>
+            </div>
+          </div>
 
-            <select
-              value={aspectFilter}
-              onChange={(e) => {
-                setAspectFilter(e.target.value);
-                handleFilterUpdate({ isVertical: e.target.value });
-              }}
-              className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-300 focus:outline-none"
-            >
-              <option value="">All Orientations</option>
-              <option value="true">Vertical 9:16 (Shorts/Reels)</option>
-              <option value="false">Horizontal / Landscape</option>
-            </select>
+          {/* Quick Filter Pills Row */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs border-t border-slate-800/60 mt-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-slate-500 text-[11px] font-medium mr-1 flex items-center gap-1">
+                <Filter className="w-3 h-3 text-slate-400" />
+                Quick Filter:
+              </span>
 
-            <select
-              value={sizeFilter}
-              onChange={(e) => {
-                setSizeFilter(e.target.value);
-                handleFilterUpdate({ sizeFilter: e.target.value });
-              }}
-              className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-300 focus:outline-none"
-            >
-              <option value="">All File Sizes</option>
-              <option value="small">&lt; 25 MB</option>
-              <option value="medium">25 MB - 100 MB</option>
-              <option value="large">&gt; 100 MB</option>
-            </select>
-
-            <select
-              value={sortOption}
-              onChange={(e) => {
-                setSortOption(e.target.value);
-                handleFilterUpdate({ sort: e.target.value });
-              }}
-              className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-300 focus:outline-none"
-            >
-              <option value="modified_desc">Modified (Newest First)</option>
-              <option value="modified_asc">Modified (Oldest First)</option>
-              <option value="created_desc">Created Date (Newest)</option>
-              <option value="name_asc">Filename (A-Z)</option>
-              <option value="name_desc">Filename (Z-A)</option>
-              <option value="size_desc">File Size (Largest First)</option>
-            </select>
-
-            {(searchQuery || statusFilter || aspectFilter || sizeFilter) && (
+              {/* All */}
               <button
                 onClick={() => {
-                  setSearchQuery('');
+                  setApprovalFilter('');
                   setStatusFilter('');
                   setAspectFilter('');
-                  setSizeFilter('');
-                  setSortOption('modified_desc');
-                  onFilterChange({ search: '', status: '', isVertical: '', sort: 'modified_desc' });
+                  handleFilterUpdate({ approvalStatus: '', status: '', isVertical: '' });
                 }}
-                className="text-indigo-400 hover:text-indigo-300 text-xs px-2 py-1"
+                className={`px-2.5 py-1 rounded-md text-xs transition-colors ${
+                  !approvalFilter && !statusFilter && !aspectFilter
+                    ? 'bg-indigo-600 text-white font-medium'
+                    : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
               >
-                Reset Filters
+                All Videos
               </button>
-            )}
+
+              {/* Approved AI */}
+              <button
+                onClick={() => {
+                  const next = approvalFilter === 'approved' ? '' : 'approved';
+                  setApprovalFilter(next);
+                  handleFilterUpdate({ approvalStatus: next });
+                }}
+                className={`px-2.5 py-1 rounded-md text-xs transition-colors flex items-center gap-1 ${
+                  approvalFilter === 'approved'
+                    ? 'bg-emerald-600 text-white font-medium shadow-xs'
+                    : 'bg-slate-900 text-emerald-400/90 hover:text-emerald-300 border border-slate-800'
+                }`}
+              >
+                <CheckCircle className="w-3 h-3" />
+                Approved AI
+              </button>
+
+              {/* Draft AI */}
+              <button
+                onClick={() => {
+                  const next = approvalFilter === 'draft' ? '' : 'draft';
+                  setApprovalFilter(next);
+                  handleFilterUpdate({ approvalStatus: next });
+                }}
+                className={`px-2.5 py-1 rounded-md text-xs transition-colors flex items-center gap-1 ${
+                  approvalFilter === 'draft'
+                    ? 'bg-amber-600 text-white font-medium shadow-xs'
+                    : 'bg-slate-900 text-amber-400/90 hover:text-amber-300 border border-slate-800'
+                }`}
+              >
+                <Clock className="w-3 h-3" />
+                Draft AI
+              </button>
+
+              {/* No AI Yet */}
+              <button
+                onClick={() => {
+                  const next = approvalFilter === 'none' ? '' : 'none';
+                  setApprovalFilter(next);
+                  handleFilterUpdate({ approvalStatus: next });
+                }}
+                className={`px-2.5 py-1 rounded-md text-xs transition-colors ${
+                  approvalFilter === 'none'
+                    ? 'bg-slate-700 text-white font-medium'
+                    : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                Needs AI
+              </button>
+
+              {/* 9:16 Vertical */}
+              <button
+                onClick={() => {
+                  const next = aspectFilter === 'true' ? '' : 'true';
+                  setAspectFilter(next);
+                  handleFilterUpdate({ isVertical: next });
+                }}
+                className={`px-2.5 py-1 rounded-md text-xs transition-colors flex items-center gap-1 ${
+                  aspectFilter === 'true'
+                    ? 'bg-indigo-600 text-white font-medium shadow-xs'
+                    : 'bg-slate-900 text-slate-300 hover:text-white border border-slate-800'
+                }`}
+              >
+                <Smartphone className="w-3 h-3" />
+                9:16 Vertical (Shorts/Reels)
+              </button>
+
+              {/* Landscape */}
+              <button
+                onClick={() => {
+                  const next = aspectFilter === 'false' ? '' : 'false';
+                  setAspectFilter(next);
+                  handleFilterUpdate({ isVertical: next });
+                }}
+                className={`px-2.5 py-1 rounded-md text-xs transition-colors flex items-center gap-1 ${
+                  aspectFilter === 'false'
+                    ? 'bg-indigo-600 text-white font-medium shadow-xs'
+                    : 'bg-slate-900 text-slate-300 hover:text-white border border-slate-800'
+                }`}
+              >
+                <Monitor className="w-3 h-3" />
+                Landscape
+              </button>
+            </div>
+
+            {/* Secondary Select Filters & Reset */}
+            <div className="flex items-center gap-2">
+              <select
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  handleFilterUpdate({ status: e.target.value });
+                }}
+                className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-300 focus:outline-none text-xs"
+              >
+                <option value="">Status: All</option>
+                <option value="discovered">Discovered</option>
+                <option value="metadata_ready">Metadata Ready</option>
+                <option value="queued">Queued</option>
+                <option value="published">Published</option>
+              </select>
+
+              <select
+                value={sizeFilter}
+                onChange={(e) => {
+                  setSizeFilter(e.target.value);
+                  handleFilterUpdate({ sizeFilter: e.target.value });
+                }}
+                className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-300 focus:outline-none text-xs"
+              >
+                <option value="">Size: All</option>
+                <option value="small">&lt; 25 MB</option>
+                <option value="medium">25 MB - 100 MB</option>
+                <option value="large">&gt; 100 MB</option>
+              </select>
+
+              {(searchQuery || statusFilter || aspectFilter || sizeFilter || approvalFilter || selectedFolder) && (
+                <button
+                  onClick={() => {
+                    setSearchQuery('');
+                    setStatusFilter('');
+                    setAspectFilter('');
+                    setSizeFilter('');
+                    setApprovalFilter('');
+                    setSelectedFolder('');
+                    setSortOption('modified_desc');
+                    onFilterChange({
+                      search: '',
+                      status: '',
+                      isVertical: '',
+                      approvalStatus: '',
+                      folderId: '',
+                      sort: 'modified_desc',
+                    });
+                  }}
+                  className="text-indigo-400 hover:text-indigo-300 text-xs px-2 py-1 transition-colors underline"
+                >
+                  Reset All
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </Card>
@@ -981,45 +1735,76 @@ export const VideoLibraryModule = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Button
               variant="ghost"
               size="sm"
               onClick={() => setSelectedVideoIds([])}
-              className="text-xs text-slate-400 hover:text-slate-200"
+              className="text-xs text-slate-400 hover:text-slate-200 cursor-pointer"
             >
-              Clear
+              Clear Selection
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={RefreshCw}
+              isLoading={isStartingBulk}
+              onClick={() => handleStartBulkAi(true)}
+              className="text-xs bg-indigo-950/70 border-indigo-500/50 text-indigo-300 hover:bg-indigo-900/70 hover:text-indigo-100 shadow-sm flex items-center gap-1.5 cursor-pointer"
+              title="Regenerate fresh AI titles, viral hooks, captions, and hashtags for all selected videos"
+            >
+              Regenerate Content with AI ({selectedVideoIds.length})
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={Sparkles}
+              isLoading={isStartingBulk}
+              onClick={() => handleStartBulkAi(false)}
+              className="text-xs cursor-pointer"
+              title="Generate AI metadata for selected videos"
+            >
+              Generate AI ({selectedVideoIds.length})
             </Button>
             <Button
               variant="primary"
               size="sm"
-              icon={Sparkles}
-              isLoading={isStartingBulk}
-              onClick={handleStartBulkAi}
-              className="text-xs bg-indigo-600 hover:bg-indigo-500"
+              icon={Calendar}
+              onClick={openBatchScheduleModal}
+              className="text-xs bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 shadow-md font-semibold text-white px-3.5 py-1.5 flex items-center gap-1.5 cursor-pointer"
             >
-              Generate AI Metadata ({selectedVideoIds.length})
+              <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
+              Batch Schedule ({selectedVideoIds.length} Videos)
             </Button>
           </div>
         </div>
       )}
 
-      {/* 5. Videos Grid / Catalog */}
+      {/* 5. Line-by-Line Video List Catalog (No Box/Card Grid) */}
       <Card>
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-4 border-b border-slate-800/80 mb-4">
           <div>
-            <h3 className="text-sm font-semibold text-slate-100">Drive Video Catalog</h3>
+            <h3 className="text-sm font-semibold text-slate-100">Video Library Catalog</h3>
             <p className="text-xs text-slate-400 mt-0.5">
               Showing page {pagination?.page || 1} of {pagination?.totalPages || 1} (
-              {pagination?.total?.toLocaleString() || 0} total indexed videos)
+              {pagination?.total?.toLocaleString() || 0} total videos on Drive)
             </p>
           </div>
 
           {videos.length > 0 && (
-            <div className="flex items-center gap-2 text-xs">
+            <div className="flex items-center gap-2 text-xs flex-wrap">
+              <button
+                onClick={selectAllApproved}
+                className="flex items-center gap-1.5 text-slate-300 hover:text-emerald-300 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-emerald-500/30 transition-colors cursor-pointer"
+                title="Select all videos that have approved AI metadata"
+              >
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Select Approved</span>
+              </button>
+
               <button
                 onClick={toggleSelectAllPage}
-                className="flex items-center gap-1.5 text-slate-300 hover:text-white px-2 py-1 rounded bg-slate-900 border border-slate-800 transition-colors"
+                className="flex items-center gap-1.5 text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 transition-colors cursor-pointer"
               >
                 {isAllPageSelected ? (
                   <CheckSquare className="w-3.5 h-3.5 text-indigo-400" />
@@ -1044,17 +1829,50 @@ export const VideoLibraryModule = ({
           )}
         </div>
 
-        {videos.length === 0 ? (
+        {googleAccounts.length === 0 ? (
+          <EmptyState
+            icon={FolderSync}
+            title="No Google Drive Connected"
+            description="Drive delete / disconnect keli ahe. Please connect your Google Drive account above to catalog, view, and manage your video reels."
+            actionLabel="Connect Google Drive"
+            onAction={handleConnectGoogleDrive}
+            actionIcon={Plus}
+          />
+        ) : videos.length === 0 ? (
           <EmptyState
             icon={Film}
-            title="No videos match current criteria"
-            description="Your video catalog is currently empty or no videos matched the active search filters. Start an indexing job to catalog files from your Google Drive."
-            actionLabel={driveStatus?.connected ? 'Configure Drive Folder' : 'Connect Google Drive'}
+            title={selectedDriveAccount !== 'all' ? 'No videos found for this Drive' : 'No videos match current criteria'}
+            description={
+              selectedDriveAccount !== 'all'
+                ? 'The selected connected Google Drive has no indexed video reels yet. Sync this drive folder to discover videos.'
+                : 'Your video catalog is currently empty or no videos matched the active search filters. Start an indexing job to catalog files from your connected Google Drive.'
+            }
+            actionLabel="Configure / Sync Drive Folder"
             onAction={() => setSyncConfigOpen(true)}
             actionIcon={FolderSync}
           />
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="space-y-2">
+            {/* Desktop Column Header */}
+            <div className="hidden lg:flex items-center justify-between gap-4 px-4 py-2.5 text-[11px] font-semibold text-slate-400 bg-slate-900/50 rounded-lg border border-slate-800/80 uppercase tracking-wider">
+              <div className="flex-1 min-w-0 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={isAllPageSelected}
+                  onChange={toggleSelectAllPage}
+                  className="rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-0 cursor-pointer"
+                />
+                <span>Video & Information</span>
+              </div>
+              <div className="flex items-center justify-end gap-5 shrink-0 text-slate-400">
+                <span className="w-28 text-left">Specs</span>
+                <span className="w-28 text-center">AI Metadata</span>
+                <span className="w-24 text-center">Status</span>
+                <span className="w-56 text-right pr-2">Actions</span>
+              </div>
+            </div>
+
+            {/* Line-by-Line Video Items */}
             {videos.map((video) => {
               const isSelected = selectedVideoIds.includes(video._id);
               const aiMeta = video.aiMetadata;
@@ -1064,135 +1882,161 @@ export const VideoLibraryModule = ({
               return (
                 <div
                   key={video._id}
-                  className={`bg-slate-950/50 border rounded-xl overflow-hidden flex flex-col justify-between transition-all ${
+                  className={`group p-3 sm:p-3.5 rounded-xl border transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-3 sm:gap-4 ${
                     isSelected
-                      ? 'border-indigo-500/80 ring-1 ring-indigo-500/50'
-                      : 'border-slate-800/80 hover:border-slate-700'
+                      ? 'bg-indigo-950/30 border-indigo-500/60 ring-1 ring-indigo-500/30'
+                      : 'bg-slate-950/60 border-slate-800/80 hover:bg-slate-900/60 hover:border-slate-700/80'
                   }`}
                 >
-                  {/* Video Info Header */}
-                  <div className="p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-start gap-2 flex-1 min-w-0">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleSelectVideo(video._id)}
-                          className="mt-0.5 rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-0 cursor-pointer"
-                        />
-                        <span
-                          className="text-xs font-semibold text-slate-100 line-clamp-2"
-                          title={video.cleanTitle || video.originalName}
+                  {/* Left: Checkbox, Thumbnail, Title & Original filename */}
+                  <div className="flex items-start sm:items-center gap-3 flex-1 min-w-0">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelectVideo(video._id)}
+                      className="mt-1 sm:mt-0 rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-0 cursor-pointer shrink-0"
+                    />
+
+                    {/* Video Thumbnail (Authenticated Proxy + Graceful Fallback) */}
+                    <VideoThumbnail video={video} onPreview={() => setPreviewVideo(video)} />
+
+                    {/* Titles & Details */}
+                    <div className="flex-1 min-w-0 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <h4
+                          onClick={() => setPreviewVideo(video)}
+                          className="text-xs sm:text-sm font-semibold text-slate-100 hover:text-indigo-300 transition-colors cursor-pointer truncate"
+                          title="Click to preview video & details"
                         >
                           {video.cleanTitle || video.originalName}
-                        </span>
+                        </h4>
                       </div>
 
-                      <div className="flex items-center gap-1 shrink-0">
-                        {approvalStatus && (
-                          <Badge
-                            variant={approvalStatus === 'approved' ? 'success' : 'warning'}
-                            className="text-[9px] uppercase tracking-wider font-semibold"
-                          >
-                            {approvalStatus}
-                          </Badge>
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
+                        <span className="font-mono text-slate-500 text-[10px] truncate max-w-[220px]" title={video.originalName}>
+                          {video.originalName}
+                        </span>
+
+                        {video.folderName && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-400">
+                            <Folder className="w-2.5 h-2.5 text-indigo-400" />
+                            {video.folderName}
+                          </span>
                         )}
-                        <Badge
-                          variant={
-                            video.status === 'published'
-                              ? 'success'
-                              : video.status === 'queued'
-                              ? 'warning'
-                              : video.status === 'metadata_ready'
-                              ? 'info'
-                              : 'neutral'
-                          }
-                          className="text-[10px] capitalize"
-                        >
-                          {video.status.replace('_', ' ')}
-                        </Badge>
                       </div>
-                    </div>
 
-                    <p className="text-[10px] text-slate-500 font-mono truncate" title={video.originalName}>
-                      {video.originalName}
-                    </p>
-
-                    {/* Badges / Specs */}
-                    <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-400">
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 border border-slate-800">
-                        <Clock className="w-3 h-3 text-slate-500" />
-                        {video.duration ? `${video.duration}s` : 'Short'}
-                      </span>
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 border border-slate-800">
-                        <Smartphone className="w-3 h-3 text-slate-500" />
-                        {video.resolution?.isVertical ? 'Vertical 9:16' : 'Landscape'}
-                      </span>
-                      <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800">
-                        {formatBytes(video.fileSize)}
-                      </span>
-                      {aiMeta?.language && (
-                        <span className="px-1.5 py-0.5 rounded bg-indigo-950/60 border border-indigo-500/30 text-indigo-300 font-semibold uppercase text-[9px]">
-                          {aiMeta.language}
-                        </span>
+                      {/* AI Snippet preview if available */}
+                      {hasAi && (
+                        <p className="text-[11px] text-indigo-300/90 truncate flex items-center gap-1 font-medium">
+                          <Sparkles className="w-3 h-3 text-indigo-400 shrink-0" />
+                          <span>{aiMeta.youtubeTitle || aiMeta.generatedTitle}</span>
+                        </p>
                       )}
                     </div>
-
-                    {/* AI Metadata snippet preview if available */}
-                    {hasAi && (
-                      <div className="p-2.5 rounded-lg bg-indigo-950/20 border border-indigo-500/20 space-y-1">
-                        <div className="flex items-center justify-between text-[10px]">
-                          <span className="flex items-center gap-1 font-semibold text-indigo-400">
-                            <Sparkles className="w-3 h-3" />
-                            YouTube Shorts Title
-                          </span>
-                          <span className="text-slate-500 text-[9px] capitalize">{aiMeta.provider}</span>
-                        </div>
-                        <p className="text-[11px] text-slate-300 font-medium line-clamp-1">
-                          {aiMeta.youtubeTitle || aiMeta.generatedTitle}
-                        </p>
-                      </div>
-                    )}
                   </div>
 
-                  {/* Card Actions */}
-                  <div className="px-4 py-3 bg-slate-900/60 border-t border-slate-800/60 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5">
-                      {video.driveWebViewLink && (
-                        <a
-                          href={video.driveWebViewLink}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-                          title="View in Google Drive"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
-                        </a>
+                  {/* Right Section: Technical Specs, AI Status, Publishing Status & Actions */}
+                  <div className="w-full lg:w-auto flex flex-wrap lg:flex-nowrap items-center justify-between lg:justify-end gap-3 sm:gap-4 pt-2.5 lg:pt-0 border-t border-slate-800/50 lg:border-t-0 shrink-0">
+                    {/* Technical Specs */}
+                    <div className="flex flex-col items-start gap-1 text-[11px] text-slate-400 w-28 shrink-0">
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px]">
+                        {video.resolution?.isVertical ? (
+                          <Smartphone className="w-3 h-3 text-emerald-400" />
+                        ) : (
+                          <Monitor className="w-3 h-3 text-slate-400" />
+                        )}
+                        {video.resolution?.width && video.resolution?.height
+                          ? `${video.resolution.width}×${video.resolution.height}`
+                          : video.resolution?.isVertical
+                          ? 'Vertical 9:16'
+                          : 'Landscape'}
+                      </span>
+                      <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
+                        <span>{formatBytes(video.fileSize)}</span>
+                        <span>•</span>
+                        <span>{video.duration ? `${video.duration}s` : 'Short'}</span>
+                        {aiMeta?.language && (
+                          <span className="px-1 rounded bg-indigo-950/60 border border-indigo-500/30 text-indigo-300 font-bold uppercase text-[9px]">
+                            {aiMeta.language}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* AI Metadata & Approval Status */}
+                    <div className="w-28 flex items-center justify-center shrink-0">
+                      {approvalStatus === 'approved' ? (
+                        <Badge variant="success" className="text-[10px] uppercase font-semibold whitespace-nowrap">
+                          <CheckCircle className="w-3 h-3 mr-1" />
+                          Approved
+                        </Badge>
+                      ) : approvalStatus === 'draft' ? (
+                        <Badge variant="warning" className="text-[10px] uppercase font-semibold whitespace-nowrap">
+                          <Clock className="w-3 h-3 mr-1" />
+                          Draft (Review)
+                        </Badge>
+                      ) : (
+                        <Badge variant="neutral" className="text-[10px] uppercase font-semibold whitespace-nowrap">
+                          No AI Yet
+                        </Badge>
                       )}
+                    </div>
+
+                    {/* Publishing Status */}
+                    <div className="w-24 flex items-center justify-center shrink-0">
+                      <Badge
+                        variant={
+                          video.status === 'published'
+                            ? 'success'
+                            : video.status === 'queued'
+                            ? 'warning'
+                            : video.status === 'metadata_ready'
+                            ? 'info'
+                            : 'neutral'
+                        }
+                        className="text-[10px] capitalize font-medium whitespace-nowrap"
+                      >
+                        {video.status.replace('_', ' ')}
+                      </Badge>
+                    </div>
+
+                    {/* Row Action Buttons */}
+                    <div className="flex items-center justify-end gap-1.5 shrink-0 ml-auto lg:ml-0">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        icon={Play}
+                        onClick={() => setPreviewVideo(video)}
+                        className="text-xs py-1 px-2 text-slate-300 hover:text-white hover:bg-slate-800 shrink-0"
+                        title="Preview video stream & details"
+                      >
+                        Watch
+                      </Button>
+
                       <Button
                         variant="ghost"
                         size="sm"
                         icon={hasAi ? Edit3 : Sparkles}
                         onClick={() => openAiGenerator(video)}
-                        className={`text-xs ${
-                          hasAi
-                            ? 'text-indigo-300 hover:text-indigo-200'
-                            : 'text-indigo-400 hover:text-indigo-300 font-medium'
+                        className={`text-xs py-1 px-2.5 whitespace-nowrap shrink-0 ${
+                          hasAi ? 'text-indigo-300 hover:text-indigo-200' : 'text-indigo-400 hover:text-indigo-300 font-medium'
                         }`}
                       >
-                        {hasAi ? 'Edit AI Metadata' : 'Generate AI'}
+                        {hasAi ? 'Review AI' : 'Generate AI'}
+                      </Button>
+
+                      <Button
+                        variant={video.status === 'queued' ? 'outline' : 'secondary'}
+                        size="sm"
+                        icon={Calendar}
+                        onClick={() => openScheduleModal(video)}
+                        className={`text-xs py-1 px-2.5 whitespace-nowrap shrink-0 ${
+                          video.status === 'queued' ? 'text-amber-400 border-amber-500/30 hover:bg-amber-950/20' : ''
+                        }`}
+                      >
+                        {video.status === 'queued' ? 'Reschedule' : 'Schedule'}
                       </Button>
                     </div>
-
-                    <Button
-                      variant={video.status === 'queued' ? 'outline' : 'secondary'}
-                      size="sm"
-                      icon={Calendar}
-                      onClick={() => openScheduleModal(video)}
-                      className={`text-xs ${video.status === 'queued' ? 'text-amber-400 border-amber-500/30 hover:bg-amber-950/20' : ''}`}
-                    >
-                      {video.status === 'queued' ? 'Reschedule' : 'Schedule'}
-                    </Button>
                   </div>
                 </div>
               );
@@ -1268,10 +2112,63 @@ export const VideoLibraryModule = ({
                 </select>
               </div>
 
-              <span className="text-slate-500">
-                Provider: <span className="text-slate-300 font-medium capitalize">{draftForm.provider}</span>
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-slate-500">
+                  Provider: <span className="text-slate-300 font-medium capitalize">{draftForm.provider}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowAiConfig((v) => !v)}
+                  className="text-indigo-400 hover:text-indigo-300 underline text-[11px] ml-1 flex items-center gap-1 cursor-pointer"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  {draftForm.provider === 'gemini' ? 'Gemini AI Active' : 'Setup Gemini AI Key'}
+                </button>
+              </div>
             </div>
+
+            {/* Optional Gemini API Key configuration card */}
+            {showAiConfig && (
+              <div className="p-2.5 rounded-lg bg-indigo-950/40 border border-indigo-900/60 space-y-2 mt-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-indigo-200">Google Gemini API Key</span>
+                  <a
+                    href="https://aistudio.google.com/app/apikey"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[10px] text-indigo-400 hover:underline flex items-center gap-0.5"
+                  >
+                    Get Free Gemini Key ↗
+                  </a>
+                </div>
+                <p className="text-[10px] text-slate-400 leading-tight">
+                  Enter your free Gemini API key for deep AI video generation, or use the built-in offline smart generator.
+                </p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="password"
+                    placeholder="Paste Gemini API Key (AIzaSy...)"
+                    value={geminiKeyInput}
+                    onChange={(e) => setGeminiKeyInput(e.target.value)}
+                    className="flex-1 bg-slate-900 border border-slate-700 rounded px-2.5 py-1 text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
+                  />
+                  <Button
+                    size="xs"
+                    variant="primary"
+                    isLoading={isConfiguringAi}
+                    onClick={handleSaveGeminiKey}
+                    className="bg-indigo-600 hover:bg-indigo-500 text-xs shrink-0"
+                  >
+                    Save & Test
+                  </Button>
+                </div>
+                {aiConfigMsg && (
+                  <p className={`text-[10px] ${aiConfigMsg.type === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {aiConfigMsg.text}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Context Disclaimer Alert */}
@@ -1560,17 +2457,35 @@ export const VideoLibraryModule = ({
                     Cancel Batch
                   </Button>
                 ) : (
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={() => {
-                      setBulkModalOpen(false);
-                      setSelectedVideoIds([]);
-                      if (onReload) onReload();
-                    }}
-                  >
-                    Close & Review Results
-                  </Button>
+                  <>
+                    {currentBulkJob?.videoIds?.length > 0 && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={RefreshCw}
+                        isLoading={isStartingBulk}
+                        onClick={() => {
+                          setSelectedVideoIds(currentBulkJob.videoIds);
+                          handleStartBulkAi(true);
+                        }}
+                        className="text-xs bg-indigo-950/70 border-indigo-700/50 text-indigo-300 hover:bg-indigo-900/60 hover:text-indigo-200 cursor-pointer"
+                        title="Re-run AI generation for all videos in this batch"
+                      >
+                        Regenerate All with AI
+                      </Button>
+                    )}
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => {
+                        setBulkModalOpen(false);
+                        setSelectedVideoIds([]);
+                        if (onReload) onReload();
+                      }}
+                    >
+                      Close & Review Results
+                    </Button>
+                  </>
                 )}
               </div>
             </div>
@@ -1823,6 +2738,519 @@ export const VideoLibraryModule = ({
           </div>
         </form>
       </Modal>
+
+      {/* 9. Smart Batch Multi-Video Scheduling Modal */}
+      <Modal
+        isOpen={batchScheduleModalOpen}
+        onClose={() => setBatchScheduleModalOpen(false)}
+        title={`Batch Schedule Videos (${batchScheduleItems.length} Videos Selected)`}
+        maxWidth="max-w-4xl"
+      >
+        <form onSubmit={handleSubmitBatchSchedule} className="space-y-5 text-xs">
+          {/* A. Global Quick-Setup Panel */}
+          <div className="p-4 rounded-xl bg-slate-950/70 border border-indigo-500/30 space-y-3.5 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-2.5">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold text-xs">
+                  ⚡
+                </div>
+                <div>
+                  <h4 className="font-semibold text-slate-100 text-xs">
+                    Quick Batch Presets (सर्व व्हिडिओंसाठी एका क्लिकमध्ये सेट करा)
+                  </h4>
+                  <p className="text-[10px] text-slate-400">
+                    Apply channels & automatic time intervals to all {batchScheduleItems.length} videos at once
+                  </p>
+                </div>
+              </div>
+
+              {/* Channel Preset Buttons */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const validIds = accounts.filter((a) => a.status === 'connected').map((a) => a._id);
+                    applyGlobalAccountsToAll(validIds);
+                  }}
+                  className="px-2 py-1 rounded bg-slate-900 border border-slate-700 hover:border-slate-600 text-slate-200 text-[10px] font-medium cursor-pointer"
+                >
+                  All Channels
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const ytIds = accounts.filter((a) => a.platform === 'youtube' && a.status === 'connected').map((a) => a._id);
+                    applyGlobalAccountsToAll(ytIds);
+                  }}
+                  className="px-2 py-1 rounded bg-red-950/50 border border-red-800/50 hover:bg-red-900/50 text-red-300 text-[10px] font-medium flex items-center gap-1 cursor-pointer"
+                >
+                  <Youtube className="w-3 h-3 text-red-400" />
+                  YouTube Only
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const igIds = accounts.filter((a) => a.platform === 'instagram' && a.status === 'connected').map((a) => a._id);
+                    applyGlobalAccountsToAll(igIds);
+                  }}
+                  className="px-2 py-1 rounded bg-pink-950/50 border border-pink-800/50 hover:bg-pink-900/50 text-pink-300 text-[10px] font-medium flex items-center gap-1 cursor-pointer"
+                >
+                  <Instagram className="w-3 h-3 text-pink-400" />
+                  Instagram Only
+                </button>
+              </div>
+            </div>
+
+            {/* Timing & Auto-Stagger Row */}
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+              <div className="sm:col-span-4">
+                <label className="block text-[11px] text-slate-300 font-medium mb-1 flex items-center gap-1">
+                  <Clock className="w-3 h-3 text-indigo-400" />
+                  Starting Date & Time (पहिला व्हिडिओ वेळ):
+                </label>
+                <input
+                  type="datetime-local"
+                  value={globalBatchConfig.startDateTime}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setGlobalBatchConfig({ ...globalBatchConfig, startDateTime: val });
+                    applyAutoStagger(val, null);
+                  }}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-slate-200 focus:outline-none text-xs"
+                />
+              </div>
+
+              <div className="sm:col-span-3">
+                <label className="block text-[11px] text-slate-300 font-medium mb-1">
+                  Interval / Gap (व्हिडिओमधील अंतर):
+                </label>
+                <select
+                  value={globalBatchConfig.intervalMinutes}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    setGlobalBatchConfig({ ...globalBatchConfig, intervalMinutes: val });
+                    applyAutoStagger(null, val);
+                  }}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-slate-200 focus:outline-none text-xs"
+                >
+                  <option value={30}>Every 30 Minutes</option>
+                  <option value={60}>Every 1 Hour (दर १ तासाने)</option>
+                  <option value={120}>Every 2 Hours (दर २ तासांनी)</option>
+                  <option value={180}>Every 3 Hours (दर ३ तासांनी)</option>
+                  <option value={240}>Every 4 Hours (दर ४ तासांनी)</option>
+                  <option value={360}>Every 6 Hours (दर ६ तासांनी)</option>
+                  <option value={720}>Every 12 Hours (सकाळ-संध्याकाळ)</option>
+                  <option value={1440}>Daily / 24 Hours (दररोज एक)</option>
+                  <option value={0}>Same Time for All (एकाच वेळी)</option>
+                </select>
+              </div>
+
+              <div className="sm:col-span-3">
+                <label className="block text-[11px] text-slate-300 font-medium mb-1">
+                  Timezone (वेळ क्षेत्र):
+                </label>
+                <select
+                  value={globalBatchConfig.timezone}
+                  onChange={(e) => setGlobalBatchConfig({ ...globalBatchConfig, timezone: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-slate-200 focus:outline-none text-xs"
+                >
+                  <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
+                  <option value="UTC">UTC (Universal Time)</option>
+                  <option value="America/New_York">America/New_York (EST)</option>
+                  <option value="America/Los_Angeles">America/Los_Angeles (PST)</option>
+                  <option value="Europe/London">Europe/London (BST)</option>
+                </select>
+              </div>
+
+              <div className="sm:col-span-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => applyAutoStagger()}
+                  className="w-full text-[11px] py-2 bg-indigo-950/60 border-indigo-700/50 hover:bg-indigo-900/60 text-indigo-300 cursor-pointer"
+                  title="Recalculate staggered times for all items"
+                >
+                  <Zap className="w-3 h-3 mr-1" />
+                  Auto-Stagger
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* B. Per-Video Customization List */}
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between text-xs text-slate-300 font-medium px-1">
+              <span className="flex items-center gap-1.5 font-semibold text-slate-200">
+                <span>Selected Videos to Schedule ({batchScheduleItems.length})</span>
+                <span className="text-[10px] text-slate-400 font-normal">
+                  — तुम्ही खाली प्रत्येक व्हिडिओचे चॅनेल आणि वेळ बदलू शकता
+                </span>
+              </span>
+              <span className="text-[11px] text-indigo-400 font-mono">
+                {batchScheduleItems.reduce((acc, it) => acc + (it.selectedAccountIds?.length || 0), 0)} Total Dispatches Queued
+              </span>
+            </div>
+
+            <div className="max-h-[50vh] overflow-y-auto space-y-2.5 pr-1">
+              {batchScheduleItems.map((item, idx) => {
+                const video = item.video;
+                const isVertical = video?.resolution?.isVertical;
+                const connectedAccounts = accounts.filter((a) => a.status === 'connected');
+
+                return (
+                  <div
+                    key={item.videoId}
+                    className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/90 hover:border-slate-700/90 transition-all space-y-3"
+                  >
+                    {/* Top Row: Number, Thumbnail, Title, and Scheduled Time Input */}
+                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+                      {/* Left: Thumbnail & Title */}
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <div className="w-6 h-6 rounded-full bg-slate-800 border border-slate-700 text-slate-300 font-mono text-[11px] flex items-center justify-center shrink-0 font-bold">
+                          {idx + 1}
+                        </div>
+
+                        <div className="w-10 h-10 rounded-lg bg-black border border-slate-800 overflow-hidden shrink-0 flex items-center justify-center relative">
+                          {video.thumbnailUrl ? (
+                            <img src={video.thumbnailUrl} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <Film className="w-4 h-4 text-slate-600" />
+                          )}
+                          {isVertical && (
+                            <div className="absolute bottom-0.5 right-0.5 w-1.5 h-1.5 bg-emerald-400 rounded-full" />
+                          )}
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          <input
+                            type="text"
+                            value={item.title}
+                            onChange={(e) => updateBatchItem(idx, 'title', e.target.value)}
+                            className="w-full bg-slate-900/60 border border-slate-800 focus:border-indigo-500 rounded px-2 py-1 text-slate-100 font-medium text-xs truncate focus:outline-none"
+                            placeholder="Video Title..."
+                            title="Click to edit post title"
+                          />
+                          <div className="flex items-center gap-2 text-[10px] text-slate-500 mt-0.5 truncate">
+                            <span className="font-mono truncate">{video.originalName}</span>
+                            <span>•</span>
+                            <span>{video.duration ? `${video.duration}s` : 'Short'}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Right: Scheduled Time Picker for this specific video */}
+                      <div className="flex items-center gap-2 w-full md:w-auto shrink-0 justify-between md:justify-end">
+                        <div className="flex items-center gap-1.5">
+                          <label className="text-[10px] text-slate-400 whitespace-nowrap font-medium">
+                            वेळ (Time):
+                          </label>
+                          <input
+                            type="datetime-local"
+                            value={item.scheduledAt}
+                            onChange={(e) => updateBatchItem(idx, 'scheduledAt', e.target.value)}
+                            className="bg-slate-900 border border-indigo-500/40 focus:border-indigo-400 rounded-lg px-2.5 py-1 text-indigo-200 text-xs font-mono focus:outline-none"
+                            required
+                          />
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => updateBatchItem(idx, 'isExpanded', !item.isExpanded)}
+                          className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-[11px] cursor-pointer"
+                          title="Toggle caption/hashtags details"
+                        >
+                          {item.isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => removeBatchItem(idx)}
+                          className="p-1 rounded hover:bg-red-950 text-slate-500 hover:text-red-400 transition-colors cursor-pointer"
+                          title="Remove this video from batch"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Middle Row: Target Channel Chips for this specific video */}
+                    <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-900">
+                      <span className="text-[10px] text-slate-400 font-medium">Publish To:</span>
+                      {connectedAccounts.length === 0 ? (
+                        <span className="text-[10px] text-amber-400">No connected social accounts found</span>
+                      ) : (
+                        connectedAccounts.map((acc) => {
+                          const isYt = acc.platform === 'youtube';
+                          const isSelected = (item.selectedAccountIds || []).includes(acc._id);
+
+                          return (
+                            <button
+                              key={acc._id}
+                              type="button"
+                              onClick={() => toggleItemAccount(idx, acc._id)}
+                              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium transition-all cursor-pointer ${
+                                isSelected
+                                  ? isYt
+                                    ? 'bg-red-500/20 text-red-300 border-red-500/50 shadow-sm'
+                                    : 'bg-pink-500/20 text-pink-300 border-pink-500/50 shadow-sm'
+                                  : 'bg-slate-900/60 text-slate-500 border-slate-800 hover:border-slate-700'
+                              }`}
+                            >
+                              {isYt ? (
+                                <Youtube className={`w-3 h-3 ${isSelected ? 'text-red-400' : 'text-slate-500'}`} />
+                              ) : (
+                                <Instagram className={`w-3 h-3 ${isSelected ? 'text-pink-400' : 'text-slate-500'}`} />
+                              )}
+                              <span>{acc.accountName}</span>
+                              {isSelected ? (
+                                <Check className="w-3 h-3 ml-0.5 text-emerald-400" />
+                              ) : (
+                                <span className="text-[9px] text-slate-600 ml-0.5">+</span>
+                              )}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    {/* Expanded Details: Caption & Hashtags if user wants to tweak */}
+                    {item.isExpanded && (
+                      <div className="space-y-2 pt-2 border-t border-slate-800/80 animate-in fade-in duration-150">
+                        <div>
+                          <label className="block text-[10px] text-slate-400 font-medium mb-1">
+                            Caption / Instagram Description:
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={item.caption}
+                            onChange={(e) => updateBatchItem(idx, 'caption', e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 rounded p-2 text-slate-200 text-xs focus:outline-none"
+                            placeholder="Caption..."
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-slate-400 font-medium mb-1">
+                            Hashtags:
+                          </label>
+                          <input
+                            type="text"
+                            value={item.hashtags}
+                            onChange={(e) => updateBatchItem(idx, 'hashtags', e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 rounded p-1.5 text-slate-200 text-xs focus:outline-none"
+                            placeholder="#Shorts #Reels..."
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* C. Modal Footer with Summary and Dispatch Button */}
+          <div className="pt-3 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="text-xs text-slate-400">
+              Total to Queue:{' '}
+              <strong className="text-indigo-300 font-mono">
+                {batchScheduleItems.reduce((acc, it) => acc + (it.selectedAccountIds?.length || 0), 0)}
+              </strong>{' '}
+              dispatches across{' '}
+              <strong className="text-slate-200 font-mono">{batchScheduleItems.length}</strong> videos
+            </div>
+
+            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                onClick={() => setBatchScheduleModalOpen(false)}
+                disabled={isSubmittingBatchSchedule}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                type="submit"
+                isLoading={isSubmittingBatchSchedule}
+                className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 shadow-md font-semibold text-white px-5 py-2 flex items-center gap-1.5 cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>Confirm & Schedule All Videos</span>
+              </Button>
+            </div>
+          </div>
+        </form>
+      </Modal>
+
+      {/* 8. Studio In-App Video Player & Inspection Modal */}
+      {previewVideo && (
+        <Modal
+          isOpen={Boolean(previewVideo)}
+          onClose={() => setPreviewVideo(null)}
+          title="Video Inspection & Player"
+          maxWidth="max-w-4xl"
+        >
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
+              {/* Video Player Column */}
+              <div className="md:col-span-7 bg-black rounded-xl overflow-hidden border border-slate-800 flex flex-col items-center justify-center min-h-[360px] relative">
+                <video
+                  key={previewVideo._id}
+                  controls
+                  autoPlay
+                  preload="metadata"
+                  poster={previewVideo.thumbnailUrl}
+                  className="w-full max-h-[460px] object-contain rounded-xl bg-black"
+                  src={`http://localhost:5000/api/videos/${previewVideo._id}/stream`}
+                >
+                  Your browser does not support HTML5 video streaming.
+                </video>
+              </div>
+
+              {/* Video Specs & AI Metadata Column */}
+              <div className="md:col-span-5 space-y-3">
+                <div className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2">
+                  <h4 className="text-sm font-semibold text-slate-100 truncate">
+                    {previewVideo.cleanTitle || previewVideo.originalName}
+                  </h4>
+                  <p className="text-xs font-mono text-slate-400 break-all">
+                    {previewVideo.originalName}
+                  </p>
+
+                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/80 text-xs text-slate-300">
+                    <div>
+                      <span className="text-slate-500 block text-[10px]">Dimensions</span>
+                      <span className="font-semibold text-slate-200">
+                        {previewVideo.resolution?.width && previewVideo.resolution?.height
+                          ? `${previewVideo.resolution.width}×${previewVideo.resolution.height}`
+                          : previewVideo.resolution?.isVertical
+                          ? '9:16 Vertical'
+                          : 'Landscape'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block text-[10px]">Duration</span>
+                      <span className="font-semibold text-slate-200">
+                        {formatDuration(previewVideo.duration)} ({previewVideo.duration || 0}s)
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block text-[10px]">File Size</span>
+                      <span className="font-semibold text-slate-200">
+                        {formatBytes(previewVideo.fileSize)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block text-[10px]">Folder</span>
+                      <span className="font-semibold text-slate-200 truncate block">
+                        {previewVideo.folderName || 'Root'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* AI Metadata Card */}
+                <div className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-slate-200 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                      AI Metadata
+                    </span>
+                    {previewVideo.aiMetadata?.approvalStatus === 'approved' ? (
+                      <Badge variant="success" className="text-[10px]">Approved</Badge>
+                    ) : previewVideo.aiMetadata?.youtubeTitle ? (
+                      <Badge variant="warning" className="text-[10px]">Draft</Badge>
+                    ) : (
+                      <Badge variant="neutral" className="text-[10px]">None</Badge>
+                    )}
+                  </div>
+
+                  {previewVideo.aiMetadata?.youtubeTitle ? (
+                    <div className="space-y-1.5 pt-1">
+                      <div>
+                        <span className="text-slate-500 block text-[10px]">Generated Title:</span>
+                        <p className="text-slate-200 font-medium">
+                          {previewVideo.aiMetadata.youtubeTitle || previewVideo.aiMetadata.generatedTitle}
+                        </p>
+                      </div>
+                      {previewVideo.aiMetadata.instagramCaption && (
+                        <div>
+                          <span className="text-slate-500 block text-[10px]">Caption:</span>
+                          <p className="text-slate-300 line-clamp-3 text-[11px]">
+                            {previewVideo.aiMetadata.instagramCaption}
+                          </p>
+                        </div>
+                      )}
+                      {previewVideo.aiMetadata.hashtags && (
+                        <div className="flex flex-wrap gap-1 pt-1">
+                          {(Array.isArray(previewVideo.aiMetadata.hashtags)
+                            ? previewVideo.aiMetadata.hashtags
+                            : String(previewVideo.aiMetadata.hashtags).split(' ')
+                          ).slice(0, 6).map((tag, idx) => (
+                            <span key={idx} className="text-[10px] text-indigo-300 bg-indigo-950/60 border border-indigo-800/40 px-1.5 py-0.5 rounded">
+                              {tag.startsWith('#') ? tag : `#${tag}`}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-slate-400 text-xs italic">
+                      No AI title or tags generated yet for this reel.
+                    </p>
+                  )}
+                </div>
+
+                {/* Modal Action Buttons */}
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  {previewVideo.driveWebViewLink && (
+                    <a
+                      href={previewVideo.driveWebViewLink}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs flex items-center gap-1.5 transition-colors"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      Drive Link
+                    </a>
+                  )}
+
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={Sparkles}
+                    onClick={() => {
+                      const v = previewVideo;
+                      setPreviewVideo(null);
+                      openAiGenerator(v);
+                    }}
+                    className="text-xs"
+                  >
+                    {previewVideo.aiMetadata?.youtubeTitle ? 'Edit AI Metadata' : 'Generate AI'}
+                  </Button>
+
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    icon={Calendar}
+                    onClick={() => {
+                      const v = previewVideo;
+                      setPreviewVideo(null);
+                      openScheduleModal(v);
+                    }}
+                    className="text-xs bg-indigo-600 hover:bg-indigo-500"
+                  >
+                    Schedule Reel
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 };

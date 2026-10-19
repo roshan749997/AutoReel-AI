@@ -1,4 +1,5 @@
 import { google } from 'googleapis';
+import axios from 'axios';
 import { config } from '../config/env.js';
 import { Account } from '../models/Account.js';
 import { Video } from '../models/Video.js';
@@ -30,6 +31,7 @@ export class GoogleDriveService {
   constructor() {
     this.oauth2Client = null;
     this.drive = null;
+    this.currentAccount = null;
     this.activeJobs = new Map(); // jobId -> { cancelled: boolean }
     this.initClient();
   }
@@ -58,7 +60,7 @@ export class GoogleDriveService {
   /**
    * Retrieves an authenticated Google Drive client by checking active connected accounts
    */
-  async getAuthenticatedClient() {
+  async getAuthenticatedClient(accountId = null) {
     if (!config.google.clientId || !config.google.clientSecret) {
       throw new Error('Google OAuth Client ID or Client Secret not configured in backend/.env');
     }
@@ -67,10 +69,16 @@ export class GoogleDriveService {
       this.initClient();
     }
 
-    // Lookup any connected real Google account in DB, fallback to any connected
-    const account =
-      (await Account.findOne({ platform: 'youtube', status: 'connected', isDemo: false })) ||
-      (await Account.findOne({ platform: 'youtube', status: 'connected' }));
+    // Lookup specified account, or any connected real Google account in DB
+    let account = null;
+    if (accountId) {
+      account = await Account.findById(accountId);
+    }
+    if (!account) {
+      account =
+        (await Account.findOne({ platform: 'youtube', status: 'connected', isDemo: false })) ||
+        (await Account.findOne({ platform: 'youtube', status: 'connected' }));
+    }
 
     if (!account) {
       throw new Error('No authorized Google account found. Please connect your Google account in Social Accounts.');
@@ -117,6 +125,7 @@ export class GoogleDriveService {
     }
 
     this.drive = google.drive({ version: 'v3', auth: this.oauth2Client });
+    this.currentAccount = account;
     return this.drive;
   }
 
@@ -266,7 +275,7 @@ export class GoogleDriveService {
   /**
    * Starts or resumes a background scalable indexing job for 20,000+ videos
    */
-  async startSyncJob({ folderId = null, resume = false, maxPages = 500, pageSize = 100, recursive = true } = {}) {
+  async startSyncJob({ folderId = null, accountId = null, resume = false, maxPages = 500, pageSize = 100, recursive = true } = {}) {
     // Check if a job is already running
     const runningJob = await SyncJob.findOne({ status: 'running' });
     if (runningJob) {
@@ -286,7 +295,7 @@ export class GoogleDriveService {
       }
     }
 
-    const drive = await this.getAuthenticatedClient();
+    const drive = await this.getAuthenticatedClient(accountId);
 
     // Validate folder
     const targetFolderId = folderId || config.google.driveFolderId || 'root';
@@ -331,7 +340,8 @@ export class GoogleDriveService {
     });
 
     // Run execution in the background asynchronously
-    this.executeSyncLoop(job, drive, { maxPages, pageSize, recursive }).catch(async (err) => {
+    const syncAccount = this.currentAccount;
+    this.executeSyncLoop(job, drive, { maxPages, pageSize, recursive, syncAccount }).catch(async (err) => {
       console.error(`[GoogleDriveService] Fatal sync job error: ${err.message}`);
       job.status = 'failed';
       job.errorMessage = err.message;
@@ -359,7 +369,7 @@ export class GoogleDriveService {
   /**
    * Background pagination worker loop
    */
-  async executeSyncLoop(job, drive, { maxPages = 500, pageSize = 100, recursive = true }) {
+  async executeSyncLoop(job, drive, { maxPages = 500, pageSize = 100, recursive = true, syncAccount = null }) {
     const jobId = job.jobId;
     let pageToken = job.pageToken || null;
     let pagesThisRun = 0;
@@ -442,6 +452,18 @@ export class GoogleDriveService {
                       folderName: job.folderName,
                       syncJobId: jobId,
                       indexingStatus: 'indexed',
+                      ...(syncAccount?._id || this.currentAccount?._id
+                        ? { accountId: syncAccount?._id || this.currentAccount?._id }
+                        : {}),
+                      ...(syncAccount?.googleEmail || syncAccount?.username || this.currentAccount?.googleEmail || this.currentAccount?.username
+                        ? {
+                            googleEmail:
+                              syncAccount?.googleEmail ||
+                              syncAccount?.username ||
+                              this.currentAccount?.googleEmail ||
+                              this.currentAccount?.username,
+                          }
+                        : {}),
                     },
                   },
                   upsert: true,
@@ -603,6 +625,33 @@ export class GoogleDriveService {
    */
   async getVideoStream(fileId) {
     return this.getFileStream(fileId);
+  }
+
+  /**
+   * Retrieves fresh thumbnail stream for a Drive file by its file ID
+   */
+  async getThumbnailStream(fileId, accountId = null) {
+    const drive = await this.getAuthenticatedClient(accountId);
+    const fileRes = await drive.files.get({
+      fileId,
+      fields: 'thumbnailLink',
+      supportsAllDrives: true,
+    });
+    const thumbUrl = fileRes.data?.thumbnailLink;
+    if (!thumbUrl) {
+      throw new Error('Thumbnail not available for file');
+    }
+    const axiosRes = await axios.get(thumbUrl, {
+      responseType: 'stream',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      },
+      timeout: 10000,
+    });
+    return {
+      stream: axiosRes.data,
+      contentType: axiosRes.headers['content-type'] || 'image/jpeg',
+    };
   }
 }
 

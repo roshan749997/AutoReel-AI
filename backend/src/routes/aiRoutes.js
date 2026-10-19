@@ -1,7 +1,14 @@
 import { Router } from 'express';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { aiService } from '../services/aiService.js';
 import { Video } from '../models/Video.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { config } from '../config/env.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const router = Router();
 
@@ -10,6 +17,51 @@ router.get('/status', async (req, res, next) => {
   try {
     const status = await aiService.testConnection();
     res.json({ status: 'success', data: status });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Configure AI provider & API Key
+router.post('/configure', async (req, res, next) => {
+  try {
+    const { geminiApiKey, geminiModel, provider = 'gemini' } = req.body;
+
+    if (geminiApiKey !== undefined) {
+      const cleanKey = String(geminiApiKey || '').trim();
+      config.ai.geminiApiKey = cleanKey;
+      config.ai.provider = cleanKey ? 'gemini' : 'manual';
+
+      // Persist to .env
+      try {
+        const envPath = path.resolve(__dirname, '../../.env');
+        if (fs.existsSync(envPath)) {
+          let envContent = fs.readFileSync(envPath, 'utf8');
+          if (envContent.includes('GEMINI_API_KEY=')) {
+            envContent = envContent.replace(/GEMINI_API_KEY=.*/, `GEMINI_API_KEY=${cleanKey}`);
+          } else {
+            envContent += `\nGEMINI_API_KEY=${cleanKey}\n`;
+          }
+          if (cleanKey && envContent.includes('AI_PROVIDER=')) {
+            envContent = envContent.replace(/AI_PROVIDER=.*/, `AI_PROVIDER=gemini`);
+          }
+          fs.writeFileSync(envPath, envContent, 'utf8');
+        }
+      } catch (err) {
+        console.warn('[AI Config] Warning: Could not write to .env file:', err.message);
+      }
+    }
+
+    if (geminiModel) {
+      config.ai.geminiModel = geminiModel.trim();
+    }
+
+    const status = await aiService.testConnection();
+    res.json({
+      status: 'success',
+      message: status.connected ? 'Gemini AI successfully connected!' : status.message,
+      data: status,
+    });
   } catch (err) {
     next(err);
   }

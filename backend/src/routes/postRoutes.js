@@ -188,7 +188,130 @@ router.post(
   }
 );
 
-// 4. Get post details
+// 4. Batch schedule multiple videos with per-video timing and channel targets
+router.post(
+  '/batch-schedule',
+  validateBody(['items']),
+  async (req, res, next) => {
+    try {
+      const { items } = req.body;
+      if (!Array.isArray(items) || items.length === 0) {
+        return next(new AppError('Items array cannot be empty', 400));
+      }
+
+      const results = [];
+      const allCreatedPosts = [];
+      const allErrors = [];
+
+      for (const item of items) {
+        const {
+          videoId,
+          targets,
+          platforms,
+          title,
+          caption,
+          hashtags,
+          scheduledAt,
+          timezone = 'UTC',
+          allowDuplicate = false,
+          autoApprove = true,
+        } = item;
+
+        const rawTargets = targets || platforms || [];
+        if (!videoId || !scheduledAt || rawTargets.length === 0) {
+          allErrors.push({
+            videoId,
+            error: 'Missing required fields (videoId, scheduledAt, or targets)',
+          });
+          continue;
+        }
+
+        // If autoApprove is set, ensure video metadata is approved upfront
+        if (autoApprove) {
+          const video = await Video.findById(videoId);
+          if (video && video.aiMetadata?.approvalStatus !== 'approved') {
+            if (!video.aiMetadata) video.aiMetadata = {};
+            video.aiMetadata.approvalStatus = 'approved';
+            video.aiMetadata.approvedAt = new Date();
+            if (title) {
+              video.aiMetadata.youtubeTitle = title;
+              video.aiMetadata.generatedTitle = title;
+            }
+            if (caption) video.aiMetadata.instagramCaption = caption;
+            if (hashtags) {
+              video.aiMetadata.hashtags = Array.isArray(hashtags)
+                ? hashtags
+                : String(hashtags).split(/[\s,]+/).filter(Boolean);
+            }
+            await video.save();
+          }
+        }
+
+        const itemCreated = [];
+        const itemErrors = [];
+
+        for (const target of rawTargets) {
+          try {
+            let targetPlatform = target.platform;
+            if (!targetPlatform) {
+              const acc = await Account.findById(target.accountId);
+              if (!acc) throw new Error(`Account ${target.accountId} not found`);
+              targetPlatform = acc.platform;
+            }
+
+            const post = await schedulerService.schedulePost({
+              videoId,
+              accountId: target.accountId,
+              platform: targetPlatform,
+              title: target.title || title,
+              caption: target.caption || caption,
+              hashtags: target.hashtags || hashtags,
+              scheduledAt,
+              timezone,
+              allowDuplicate: target.allowDuplicate !== undefined ? Boolean(target.allowDuplicate) : Boolean(allowDuplicate),
+              autoApprove,
+            });
+
+            itemCreated.push(post);
+            allCreatedPosts.push(post);
+          } catch (err) {
+            const errObj = {
+              videoId,
+              accountId: target.accountId,
+              platform: target.platform || 'unknown',
+              error: err.message,
+            };
+            itemErrors.push(errObj);
+            allErrors.push(errObj);
+          }
+        }
+
+        results.push({
+          videoId,
+          scheduledCount: itemCreated.length,
+          errors: itemErrors,
+        });
+      }
+
+      const totalScheduled = allCreatedPosts.length;
+      res.status(totalScheduled > 0 ? 201 : 400).json({
+        status: totalScheduled > 0 ? 'success' : 'fail',
+        message: `Batch scheduling completed: ${totalScheduled} post(s) scheduled across ${items.length} video(s)${allErrors.length > 0 ? ` with ${allErrors.length} failure(s)` : ''}`,
+        data: {
+          totalScheduled,
+          totalVideos: items.length,
+          scheduledPosts: allCreatedPosts,
+          errors: allErrors,
+          results,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// 5. Get post details
 router.get('/:id', async (req, res, next) => {
   try {
     const post = await Post.findById(req.params.id)
@@ -297,7 +420,33 @@ router.post('/:id/publish-now', requireAdminAuth, async (req, res, next) => {
   }
 });
 
-// 12. Delete post completely from queue
+// 12. Purge old, failed, or all posts from queue (bulk delete)
+router.delete('/purge/all', requireAdminAuth, async (req, res, next) => {
+  try {
+    const { status, all } = req.query;
+    const filter = {};
+
+    if (all === 'true') {
+      // Delete all posts in queue
+    } else if (status && status !== 'all') {
+      filter.status = status;
+    } else {
+      // Default purge targets failed, cancelled, and published old posts
+      filter.status = { $in: ['failed', 'cancelled', 'published'] };
+    }
+
+    const result = await Post.deleteMany(filter);
+    res.json({
+      status: 'success',
+      message: `Successfully cleared ${result.deletedCount} post(s) from publishing queue`,
+      deletedCount: result.deletedCount,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 13. Delete post completely from queue
 router.delete('/:id', requireAdminAuth, async (req, res, next) => {
   try {
     const post = await Post.findByIdAndDelete(req.params.id);

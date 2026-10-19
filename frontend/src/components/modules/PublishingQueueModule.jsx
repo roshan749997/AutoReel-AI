@@ -190,6 +190,23 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
     }
   };
 
+  const handlePurgeQueue = async (purgeAll = false) => {
+    const confirmMsg = purgeAll
+      ? 'Are you sure you want to completely clear ALL items from the publishing queue?'
+      : 'Clear all failed, cancelled, and old finished posts from the queue?';
+    if (!window.confirm(confirmMsg)) return;
+    try {
+      setIsActionLoading(true);
+      const res = await api.purgePosts(purgeAll ? { all: 'true' } : {});
+      alert(res.message || 'Publishing queue cleaned successfully!');
+      if (onReload) onReload();
+    } catch (err) {
+      alert(`Clear queue error: ${err.message}`);
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
   const handlePublishNow = async (id) => {
     if (!window.confirm('Dispatch and publish this post to YouTube now?')) return;
     try {
@@ -239,6 +256,18 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
               <span className="text-xs px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400">
                 {posts.length} Total Jobs
               </span>
+              {posts.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => handlePurgeQueue(false)}
+                  disabled={isActionLoading}
+                  className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded bg-red-950/40 border border-red-800/50 text-red-400 hover:bg-red-900/50 hover:text-red-300 transition-colors cursor-pointer"
+                  title="Remove old failed, cancelled, and completed posts from queue"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  Clear Old
+                </button>
+              )}
             </div>
             <p className="text-xs text-slate-400 mt-1">
               Timezone-aware scheduling with bounded queue workers, retry backoff, and n8n webhook orchestration

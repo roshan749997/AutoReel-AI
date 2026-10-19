@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { Video } from '../models/Video.js';
+import { Account } from '../models/Account.js';
 import { SyncJob } from '../models/SyncJob.js';
 import { googleDriveService } from '../services/googleDriveService.js';
 import { requireAdminAuth } from '../middleware/auth.js';
@@ -46,9 +47,10 @@ router.post('/drive/validate-folder', async (req, res, next) => {
 // 3. Start or resume background sync job
 router.post('/sync/start', requireAdminAuth, async (req, res, next) => {
   try {
-    const { folderId, resume = false, maxPages = 500, pageSize = 100, recursive = true } = req.body;
+    const { folderId, accountId, resume = false, maxPages = 500, pageSize = 100, recursive = true } = req.body;
     const result = await googleDriveService.startSyncJob({
       folderId,
+      accountId,
       resume,
       maxPages,
       pageSize,
@@ -63,9 +65,10 @@ router.post('/sync/start', requireAdminAuth, async (req, res, next) => {
 // Legacy alias for /sync/start
 router.post('/sync', requireAdminAuth, async (req, res, next) => {
   try {
-    const { folderId, resume = false, maxPages = 500, pageSize = 100, recursive = true } = req.body;
+    const { folderId, accountId, resume = false, maxPages = 500, pageSize = 100, recursive = true } = req.body;
     const result = await googleDriveService.startSyncJob({
       folderId,
+      accountId,
       resume,
       maxPages,
       pageSize,
@@ -109,6 +112,38 @@ router.post('/sync/cancel', requireAdminAuth, async (req, res, next) => {
   }
 });
 
+/**
+ * Helper to query active connected Google Drive accounts and construct the drive filter
+ */
+async function getConnectedDriveQuery(accountId = null) {
+  const connectedAccounts = await Account.find({
+    platform: 'youtube',
+    status: 'connected',
+    isDemo: { $ne: true },
+  });
+
+  if (connectedAccounts.length === 0) {
+    return { hasConnected: false, connectedAccounts: [] };
+  }
+
+  const connectedIds = connectedAccounts.map((a) => a._id);
+  const connectedEmails = connectedAccounts.map((a) => a.googleEmail).filter(Boolean);
+
+  let accountFilter;
+  if (accountId && accountId !== 'all') {
+    accountFilter = { accountId };
+  } else {
+    accountFilter = {
+      $or: [
+        { accountId: { $in: connectedIds } },
+        ...(connectedEmails.length > 0 ? [{ googleEmail: { $in: connectedEmails } }] : []),
+      ],
+    };
+  }
+
+  return { hasConnected: true, connectedAccounts, accountFilter };
+}
+
 // 6. List videos with server-side pagination, search, sorting, and multi-filters (20k+ video library)
 router.get('/', async (req, res, next) => {
   try {
@@ -116,40 +151,79 @@ router.get('/', async (req, res, next) => {
     const limit = Math.min(Math.max(1, parseInt(req.query.limit || '12', 10)), 100);
     const skip = (page - 1) * limit;
 
-    const query = { isArchived: false };
+    const driveInfo = await getConnectedDriveQuery(req.query.accountId);
+    if (!driveInfo.hasConnected) {
+      return res.json({
+        status: 'success',
+        data: [],
+        pagination: {
+          total: 0,
+          page: 1,
+          limit,
+          totalPages: 1,
+        },
+      });
+    }
+
+    const andConditions = [{ isArchived: false }, driveInfo.accountFilter];
 
     // Status filter
     if (req.query.status) {
-      query.status = req.query.status;
+      andConditions.push({ status: req.query.status });
     }
 
     // Indexing status filter
     if (req.query.indexingStatus) {
-      query.indexingStatus = req.query.indexingStatus;
+      andConditions.push({ indexingStatus: req.query.indexingStatus });
     }
 
     // Aspect ratio vertical filter (Shorts/Reels 9:16)
     if (req.query.isVertical !== undefined && req.query.isVertical !== '') {
-      query['resolution.isVertical'] = req.query.isVertical === 'true';
+      andConditions.push({ 'resolution.isVertical': req.query.isVertical === 'true' });
+    }
+
+    // AI Approval Status filter
+    if (req.query.approvalStatus) {
+      if (req.query.approvalStatus === 'approved') {
+        andConditions.push({ 'aiMetadata.approvalStatus': 'approved' });
+      } else if (req.query.approvalStatus === 'draft') {
+        andConditions.push({
+          'aiMetadata.approvalStatus': 'draft',
+          'aiMetadata.generatedTitle': { $exists: true, $ne: '' },
+        });
+      } else if (req.query.approvalStatus === 'none') {
+        andConditions.push({
+          $or: [
+            { 'aiMetadata.generatedTitle': { $exists: false } },
+            { 'aiMetadata.generatedTitle': '' },
+            { 'aiMetadata.generatedTitle': null },
+          ],
+        });
+      }
     }
 
     // File size filter range (in bytes)
     if (req.query.minSize || req.query.maxSize) {
-      query.fileSize = {};
-      if (req.query.minSize) query.fileSize.$gte = parseInt(req.query.minSize, 10);
-      if (req.query.maxSize) query.fileSize.$lte = parseInt(req.query.maxSize, 10);
+      const sizeCond = {};
+      if (req.query.minSize) sizeCond.$gte = parseInt(req.query.minSize, 10);
+      if (req.query.maxSize) sizeCond.$lte = parseInt(req.query.maxSize, 10);
+      andConditions.push({ fileSize: sizeCond });
     }
 
     // Target folder filter
     if (req.query.folderId) {
-      query.folderId = req.query.folderId;
+      andConditions.push({ folderId: req.query.folderId });
     }
 
     // Search query (clean title, original filename, or notes)
     if (req.query.search && req.query.search.trim()) {
       const searchRegex = new RegExp(req.query.search.trim(), 'i');
-      query.$or = [{ originalName: searchRegex }, { cleanTitle: searchRegex }, { notes: searchRegex }];
+      andConditions.push({
+        $or: [{ originalName: searchRegex }, { cleanTitle: searchRegex }, { notes: searchRegex }],
+      });
     }
+
+    const query = andConditions.length > 1 ? { $and: andConditions } : andConditions[0];
 
     // Sorting
     let sortOptions = { driveModifiedAt: -1 };
@@ -175,6 +249,15 @@ router.get('/', async (req, res, next) => {
       case 'size_asc':
         sortOptions = { fileSize: 1 };
         break;
+      case 'duration_desc':
+        sortOptions = { duration: -1 };
+        break;
+      case 'duration_asc':
+        sortOptions = { duration: 1 };
+        break;
+      case 'approval_status':
+        sortOptions = { 'aiMetadata.approvalStatus': -1, driveModifiedAt: -1 };
+        break;
       default:
         sortOptions = { driveModifiedAt: -1 };
     }
@@ -192,6 +275,102 @@ router.get('/', async (req, res, next) => {
         page,
         limit,
         totalPages: Math.ceil(total / limit) || 1,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 6b. Summary of distinct folders containing videos
+router.get('/folders/summary', async (req, res, next) => {
+  try {
+    const driveInfo = await getConnectedDriveQuery(req.query.accountId);
+    if (!driveInfo.hasConnected) {
+      return res.json({ status: 'success', data: [] });
+    }
+
+    const matchConditions = [
+      { isArchived: false, folderName: { $exists: true, $ne: '' } },
+      driveInfo.accountFilter,
+    ];
+
+    const folders = await Video.aggregate([
+      { $match: { $and: matchConditions } },
+      {
+        $group: {
+          _id: '$folderId',
+          folderName: { $first: '$folderName' },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { count: -1 } },
+    ]);
+    res.json({ status: 'success', data: folders });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 6c. Summary statistics for library quick filtering
+router.get('/stats', async (req, res, next) => {
+  try {
+    const driveInfo = await getConnectedDriveQuery(req.query.accountId);
+    if (!driveInfo.hasConnected) {
+      return res.json({
+        status: 'success',
+        data: {
+          total: 0,
+          approved: 0,
+          draft: 0,
+          needsAi: 0,
+          vertical: 0,
+          queued: 0,
+          published: 0,
+        },
+      });
+    }
+
+    const baseFilter = { $and: [{ isArchived: false }, driveInfo.accountFilter] };
+
+    const [total, approved, draft, vertical, queued, published] = await Promise.all([
+      Video.countDocuments(baseFilter),
+      Video.countDocuments({
+        $and: [{ isArchived: false }, driveInfo.accountFilter, { 'aiMetadata.approvalStatus': 'approved' }],
+      }),
+      Video.countDocuments({
+        $and: [
+          { isArchived: false },
+          driveInfo.accountFilter,
+          {
+            'aiMetadata.approvalStatus': 'draft',
+            'aiMetadata.generatedTitle': { $exists: true, $ne: '' },
+          },
+        ],
+      }),
+      Video.countDocuments({
+        $and: [{ isArchived: false }, driveInfo.accountFilter, { 'resolution.isVertical': true }],
+      }),
+      Video.countDocuments({
+        $and: [{ isArchived: false }, driveInfo.accountFilter, { status: 'queued' }],
+      }),
+      Video.countDocuments({
+        $and: [{ isArchived: false }, driveInfo.accountFilter, { status: 'published' }],
+      }),
+    ]);
+
+    const needsAi = Math.max(0, total - (approved + draft));
+
+    res.json({
+      status: 'success',
+      data: {
+        total,
+        approved,
+        draft,
+        needsAi,
+        vertical,
+        queued,
+        published,
       },
     });
   } catch (err) {
@@ -227,6 +406,26 @@ router.get('/:id', async (req, res, next) => {
     res.json({ status: 'success', data: video });
   } catch (err) {
     next(err);
+  }
+});
+
+// 8b. Stream video thumbnail proxy (solves Google Drive private/referrer blocked thumbnails)
+router.get('/:id/thumbnail', async (req, res, next) => {
+  try {
+    const video = await Video.findById(req.params.id);
+    if (!video || !video.driveFileId) {
+      return res.status(404).send('Not found');
+    }
+
+    const { stream, contentType } = await googleDriveService.getThumbnailStream(
+      video.driveFileId,
+      video.accountId
+    );
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    stream.pipe(res);
+  } catch (err) {
+    res.status(404).send('Thumbnail unavailable');
   }
 });
 

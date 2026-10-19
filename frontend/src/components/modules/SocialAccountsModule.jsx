@@ -33,12 +33,10 @@ import { api } from '../../api/client.js';
 
 export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => {
   const [activeTab, setActiveTab] = useState('all'); // 'all' | 'youtube' | 'instagram'
-  const [sourceFilter, setSourceFilter] = useState('all'); // 'all' | 'real' | 'demo'
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [testingId, setTestingId] = useState(null);
   const [actionLoadingId, setActionLoadingId] = useState(null);
-  const [isPurging, setIsPurging] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
   const [showGuide, setShowGuide] = useState(false);
@@ -153,18 +151,15 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
     }
   }, []);
 
-  // Compute counts
-  const realAccountsCount = accounts.filter((a) => !a.isDemo).length;
-  const demoAccountsCount = accounts.filter((a) => a.isDemo).length;
-  const ytCount = accounts.filter((a) => a.platform === 'youtube').length;
-  const igCount = accounts.filter((a) => a.platform === 'instagram').length;
+  // Compute counts (strictly real accounts)
+  const realAccounts = accounts.filter((a) => !a.isDemo);
+  const ytCount = realAccounts.filter((a) => a.platform === 'youtube').length;
+  const igCount = realAccounts.filter((a) => a.platform === 'instagram').length;
 
   // Filter accounts
-  const filteredAccounts = accounts.filter((acc) => {
+  const filteredAccounts = realAccounts.filter((acc) => {
     if (activeTab !== 'all' && acc.platform !== activeTab) return false;
     if (statusFilter !== 'all' && acc.status !== statusFilter) return false;
-    if (sourceFilter === 'real' && acc.isDemo) return false;
-    if (sourceFilter === 'demo' && !acc.isDemo) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const matchName = (acc.accountName || '').toLowerCase().includes(q);
@@ -259,23 +254,7 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
     }
   };
 
-  const handlePurgeDemo = async () => {
-    const count = demoAccountsCount;
-    const confirmText = `Are you sure you want to remove all ${count} demo/mock channel records?\n\nReal authorized accounts and their encrypted tokens will NOT be affected.\n\nThis action cannot be undone.`;
-    if (!window.confirm(confirmText)) return;
 
-    try {
-      setIsPurging(true);
-      setErrorMsg(null);
-      const res = await api.purgeDemoAccounts();
-      setSuccessMsg(res.message || `Cleaned up ${res.deletedCount || count} demo records.`);
-      if (onReload) onReload();
-    } catch (err) {
-      setErrorMsg(`Failed to purge demo accounts: ${err.message}`);
-    } finally {
-      setIsPurging(false);
-    }
-  };
 
   const handleOpenSettings = (account) => {
     setSettingsModalAccount(account);
@@ -465,13 +444,8 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
             <div className="flex items-center gap-2.5 flex-wrap">
               <h3 className="text-base font-semibold text-slate-100">Connected Social Channels</h3>
               <span className="text-xs px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-300">
-                {realAccountsCount} Real Channels
+                {realAccounts.length} Connected
               </span>
-              {demoAccountsCount > 0 && (
-                <span className="text-xs px-2 py-0.5 rounded bg-purple-500/10 border border-purple-500/20 text-purple-400">
-                  {demoAccountsCount} Demo Records
-                </span>
-              )}
             </div>
             <p className="text-xs text-slate-400 mt-1 max-w-xl">
               Connect real Google accounts to discover and publish to your authentic YouTube channels. Each Google account is authorized independently and all tokens are AES-256-GCM encrypted.
@@ -498,19 +472,6 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
             >
               Add Instagram
             </Button>
-            {demoAccountsCount > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                icon={Trash2}
-                isLoading={isPurging}
-                onClick={handlePurgeDemo}
-                className="text-purple-400 hover:text-purple-300 hover:bg-purple-500/10 border border-purple-500/20"
-                title="Purge all mock test channels from database"
-              >
-                Purge Demo ({demoAccountsCount})
-              </Button>
-            )}
             <Button
               variant="ghost"
               size="sm"
@@ -627,41 +588,6 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
             </button>
           </div>
 
-          {/* Source Segregation Filter */}
-          <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800/80 text-xs">
-            <button
-              onClick={() => setSourceFilter('all')}
-              className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
-                sourceFilter === 'all'
-                  ? 'bg-slate-800 text-slate-100'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              All Sources ({accounts.length})
-            </button>
-            <button
-              onClick={() => setSourceFilter('real')}
-              className={`px-2.5 py-1 rounded-lg font-medium transition-colors flex items-center gap-1 ${
-                sourceFilter === 'real'
-                  ? 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/30'
-                  : 'text-slate-400 hover:text-emerald-400'
-              }`}
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              Real ({realAccountsCount})
-            </button>
-            <button
-              onClick={() => setSourceFilter('demo')}
-              className={`px-2.5 py-1 rounded-lg font-medium transition-colors flex items-center gap-1 ${
-                sourceFilter === 'demo'
-                  ? 'bg-purple-600/30 text-purple-300 border border-purple-500/30'
-                  : 'text-slate-400 hover:text-purple-400'
-              }`}
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
-              Demo ({demoAccountsCount})
-            </button>
-          </div>
         </div>
 
         {/* Search & Status Filters */}
@@ -712,24 +638,21 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
                 : 'Try adjusting your search query, source filter, or status filter.'
             }
             actionLabel={
-              sourceFilter === 'real' && realAccountsCount === 0
+              realAccounts.length === 0
                 ? 'Add Google Account'
-                : accounts.length === 0
-                ? 'Connect YouTube Channel'
                 : 'Clear Filters'
             }
             onAction={
-              accounts.length === 0 || (sourceFilter === 'real' && realAccountsCount === 0)
+              realAccounts.length === 0
                 ? handleConnectYouTube
                 : () => {
                     setSearchQuery('');
                     setStatusFilter('all');
                     setActiveTab('all');
-                    setSourceFilter('all');
                   }
             }
             actionIcon={
-              accounts.length === 0 || (sourceFilter === 'real' && realAccountsCount === 0)
+              realAccounts.length === 0
                 ? Youtube
                 : RefreshCw
             }
@@ -747,9 +670,7 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
                 className={`p-4 rounded-xl bg-slate-950/40 border transition-all flex flex-col justify-between space-y-4 ${
                   isAuthIssue
                     ? 'border-amber-500/30 shadow-sm shadow-amber-500/5'
-                    : acc.isDemo
-                    ? 'border-slate-800/80 hover:border-purple-500/40'
-                    : 'border-slate-800/80 hover:border-emerald-500/40'
+                    : 'border-slate-800/80 hover:border-indigo-500/40'
                 }`}
               >
                 {/* Header: Avatar, Name, Platform Badge, Status */}
@@ -786,11 +707,6 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
 
                     <div className="shrink-0 flex flex-col items-end gap-1">
                       {getStatusBadge(acc.status)}
-                      {acc.isDemo ? (
-                        <Badge variant="purple" dot className="text-[10px]">Demo Data</Badge>
-                      ) : (
-                        <Badge variant="success" dot className="text-[10px]">Real Account</Badge>
-                      )}
                     </div>
                   </div>
 

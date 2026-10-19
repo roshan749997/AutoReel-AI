@@ -252,7 +252,14 @@ export class SchedulerService {
     const prefix = account.settings?.defaultTitlePrefix || '';
     const suffix = account.settings?.defaultTitleSuffix || '';
     const baseTitle = title || video.aiMetadata?.youtubeTitle || video.cleanTitle || video.originalName;
-    const finalTitle = `${prefix}${baseTitle}${suffix}`.trim();
+    let finalTitle = `${prefix}${baseTitle}${suffix}`.trim();
+    if (platform === 'youtube' && !finalTitle.toLowerCase().includes('#shorts')) {
+      if (finalTitle.length + 8 <= 100) {
+        finalTitle = `${finalTitle} #Shorts`;
+      } else {
+        finalTitle = `${finalTitle.substring(0, 91).trim()} #Shorts`;
+      }
+    }
 
     // 6. Create Post in MongoDB
     const post = await Post.create({

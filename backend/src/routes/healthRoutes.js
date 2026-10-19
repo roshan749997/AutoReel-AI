@@ -112,6 +112,14 @@ router.get('/setup-checklist', async (req, res) => {
     }
   }
 
+  let isN8nRunning = false;
+  try {
+    const n8nRes = await axios.get('http://127.0.0.1:5678/healthz', { timeout: 1000 });
+    isN8nRunning = n8nRes.status === 200;
+  } catch {
+    isN8nRunning = false;
+  }
+
   const checklist = [
     {
       id: 'mongodb',
@@ -154,7 +162,7 @@ router.get('/setup-checklist', async (req, res) => {
       id: 'n8n_docker',
       title: 'Local n8n Automation Engine',
       description: 'Start self-hosted n8n in Docker bound to 127.0.0.1:5678',
-      isCompleted: false, // Updated dynamically via /integrations
+      isCompleted: isN8nRunning,
       docsLink: 'automation/n8n/README.md',
     },
   ];

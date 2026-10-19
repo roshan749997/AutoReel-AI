@@ -37,6 +37,7 @@ function isDuplicateWebhook(eventId) {
 router.get('/status', async (req, res) => {
   let isReachable = false;
   let statusInfo = null;
+  let error = null;
 
   try {
     const response = await axios.get('http://127.0.0.1:5678/healthz', { timeout: 2000 });
@@ -44,15 +45,21 @@ router.get('/status', async (req, res) => {
     statusInfo = response.data;
   } catch (err) {
     isReachable = false;
+    error = err.message;
   }
 
   res.json({
     status: 'success',
     data: {
+      connected: isReachable,
       isReachable,
       webhookUrl: config.n8n.webhookUrl,
       dockerStatus: isReachable ? 'running' : 'stopped_or_unreachable',
       statusInfo,
+      error,
+      message: isReachable
+        ? 'n8n Community Edition running on 127.0.0.1:5678'
+        : 'n8n not reachable at 127.0.0.1:5678',
     },
   });
 });
@@ -86,13 +93,29 @@ router.post('/trigger', requireAdminAuth, async (req, res, next) => {
       data: response.data,
     });
   } catch (err) {
+    const is404 = err.response?.status === 404;
+    const isConnRefused = err.code === 'ECONNREFUSED';
+    let detailMsg = err.message;
+
+    if (is404) {
+      detailMsg = `n8n webhook 404: The workflow "video-pipeline" is either not imported or not toggled to Active in n8n. Open http://127.0.0.1:5678, import "automation/n8n/workflows/approved_publishing_pipeline.json", and toggle it to Active.`;
+    } else if (isConnRefused) {
+      detailMsg = `n8n connection refused: Docker container is stopped or not listening on 127.0.0.1:5678. Run "docker compose -f automation/n8n/docker-compose.yml up -d".`;
+    }
+
     await WorkflowLog.create({
       level: 'warn',
       module: 'n8n',
       action: 'workflow_trigger_failed',
-      message: `Failed to trigger n8n: ${err.message}`,
+      message: `Failed to trigger n8n: ${detailMsg}`,
+      metadata: {
+        statusCode: err.response?.status,
+        responseBody: err.response?.data,
+        targetUrl,
+      },
     });
-    next(new AppError(`n8n trigger failed (is n8n running at 127.0.0.1:5678?): ${err.message}`, 502));
+
+    next(new AppError(`n8n trigger failed: ${detailMsg}`, 502));
   }
 });
 

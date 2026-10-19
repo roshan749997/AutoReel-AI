@@ -286,30 +286,41 @@ export class YouTubeService {
 
     const youtube = await this.getAuthenticatedClient(account);
 
-    // 1. Title formatting & strict 100 char limit
+    // 1. Title formatting & strict 100 char limit (Always enforce #Shorts for YouTube Shorts feed indexing)
     const rawTitle = (title || 'Untitled Video').trim();
     let finalTitle = rawTitle;
     if (isShort && !finalTitle.toLowerCase().includes('#shorts')) {
       if (finalTitle.length + 8 <= 100) {
         finalTitle = `${finalTitle} #Shorts`;
+      } else {
+        finalTitle = `${finalTitle.substring(0, 91).trim()} #Shorts`;
       }
     }
     if (finalTitle.length > 100) {
-      finalTitle = finalTitle.substring(0, 97).trim() + '...';
+      finalTitle = `${finalTitle.substring(0, 91).trim()} #Shorts`;
     }
 
-    // 2. Description formatting & fallback
+    // 2. Description formatting & fallback (Must include #Shorts and YouTube Shorts hashtags)
     const rawDesc = (description || '').trim();
     let finalDescription = rawDesc;
     if (!finalDescription) {
-      finalDescription = `${finalTitle}\n\n#Shorts #Reels #Viral`;
+      finalDescription = `${finalTitle}\n\n#Shorts #YouTubeShorts #ShortsFeed #Viral #Trending`;
     } else if (isShort && !finalDescription.toLowerCase().includes('#shorts')) {
-      finalDescription = `${finalDescription}\n\n#Shorts`;
+      finalDescription = `${finalDescription}\n\n#Shorts #YouTubeShorts #ShortsFeed`;
     }
 
-    // 3. Tags formatting
+    // 3. Tags formatting (Ensure Shorts tags are prioritized)
     const rawTags = Array.isArray(tags) ? tags : String(tags || '').split(/[\s,]+/).filter(Boolean);
-    const finalTags = rawTags.length > 0 ? rawTags.map(t => t.replace(/^#/, '')) : ['Shorts', 'Reels', 'Viral'];
+    const cleanTags = rawTags.map((t) => t.replace(/^#/, '').trim()).filter(Boolean);
+    if (isShort) {
+      const mandatoryShortsTags = ['Shorts', 'YouTubeShorts', 'ShortsFeed', 'Viral'];
+      for (const st of mandatoryShortsTags) {
+        if (!cleanTags.some((t) => t.toLowerCase() === st.toLowerCase())) {
+          cleanTags.unshift(st);
+        }
+      }
+    }
+    const finalTags = cleanTags.length > 0 ? cleanTags.slice(0, 15) : ['Shorts', 'YouTubeShorts', 'Viral'];
 
     const statusPayload = {
       privacyStatus: scheduledAt ? 'private' : 'public',
