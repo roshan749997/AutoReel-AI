@@ -1,0 +1,26 @@
+{
+  "name": "ai-video-automation-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Production-minded, free-only AI Video Automation Dashboard & Pipeline",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev": "concurrently -n \"BACKEND,FRONTEND\" -c \"blue,green\" \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
+    "build:frontend": "npm --prefix frontend run build",
+    "build": "npm --prefix frontend run build",
+    "test:backend": "npm --prefix backend run test",
+    "test": "npm --prefix backend run test",
+    "lint:frontend": "npm --prefix frontend run lint",
+    "n8n:up": "docker compose -f automation/n8n/docker-compose.yml up -d",
+    "n8n:down": "docker compose -f automation/n8n/docker-compose.yml down",
+    "n8n:logs": "docker compose -f automation/n8n/docker-compose.yml logs -f"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

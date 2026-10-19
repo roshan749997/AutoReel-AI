@@ -1,0 +1,123 @@
+{
+  "name": "Approved Video Publishing Queue Orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "video-pipeline",
+        "options": {}
+      },
+      "id": "node-webhook-trigger",
+      "name": "Queue Webhook Receiver",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "video-pipeline"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.body.event }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "node-filter-event",
+      "name": "Verify Valid Event",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://127.0.0.1:5000/api/workflows/callback",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-WEBHOOK-SECRET",
+              "value": "video_automation_n8n_secret_default"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "eventId",
+              "value": "={{ $json.body.idempotencyKey || $json.body.postId + '_' + $json.body.event }}"
+            },
+            {
+              "name": "postId",
+              "value": "={{ $json.body.postId }}"
+            },
+            {
+              "name": "status",
+              "value": "={{ $json.body.status }}"
+            },
+            {
+              "name": "workflowName",
+              "value": "Approved Video Publishing Queue Orchestrator"
+            },
+            {
+              "name": "message",
+              "value": "={{ 'n8n verified queue event: ' + $json.body.event + ' for ' + $json.body.platform }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-http-callback",
+      "name": "Report to Backend Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        680,
+        280
+      ]
+    }
+  ],
+  "connections": {
+    "Queue Webhook Receiver": {
+      "main": [
+        [
+          {
+            "node": "Verify Valid Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Valid Event": {
+      "main": [
+        [
+          {
+            "node": "Report to Backend Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

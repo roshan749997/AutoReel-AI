@@ -1,0 +1,209 @@
+import { Router } from 'express';
+import { aiService } from '../services/aiService.js';
+import { Video } from '../models/Video.js';
+import { AppError } from '../middleware/errorHandler.js';
+
+const router = Router();
+
+// 1. Get AI provider diagnostic status
+router.get('/status', async (req, res, next) => {
+  try {
+    const status = await aiService.testConnection();
+    res.json({ status: 'success', data: status });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 2. Generate metadata for a single video (with language selection)
+router.post('/generate', async (req, res, next) => {
+  try {
+    const {
+      videoId,
+      originalName,
+      cleanTitle,
+      folderName,
+      duration,
+      notes,
+      language = 'en',
+      saveToVideo = true,
+    } = req.body;
+
+    let payload = { originalName, cleanTitle, folderName, duration, notes, language };
+    let video = null;
+
+    if (videoId) {
+      video = await Video.findById(videoId);
+      if (!video) {
+        return next(new AppError('Video not found', 404));
+      }
+      payload = {
+        originalName: video.originalName,
+        cleanTitle: video.cleanTitle || video.originalName,
+        folderName: video.folderName,
+        duration: video.duration,
+        notes: notes || video.notes,
+        language: language || video.aiMetadata?.language || 'en',
+      };
+    }
+
+    if (!payload.originalName && !payload.cleanTitle) {
+      return next(new AppError('Please provide videoId or originalName/cleanTitle', 400));
+    }
+
+    const metadata = await aiService.generateMetadata(payload);
+
+    if (video && saveToVideo) {
+      video.aiMetadata = {
+        generatedTitle: metadata.youtubeTitle,
+        youtubeTitle: metadata.youtubeTitle,
+        instagramCaption: metadata.instagramCaption,
+        description: metadata.description,
+        hook: metadata.hook,
+        cta: metadata.cta,
+        hashtags: metadata.hashtags,
+        tags: metadata.tags,
+        category: metadata.category,
+        language: metadata.language,
+        provider: metadata.provider,
+        generatedAt: metadata.generatedAt,
+        approvalStatus: 'draft',
+      };
+      if (video.status === 'discovered') {
+        video.status = 'metadata_ready';
+      }
+      await video.save();
+    }
+
+    res.json({
+      status: 'success',
+      data: {
+        metadata,
+        video: video ? video._id : null,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 3. Start Bulk AI metadata generation
+router.post('/bulk/start', async (req, res, next) => {
+  try {
+    const { videoIds, language = 'en', concurrency = 2, retryFailedOnly = false } = req.body;
+
+    if (!Array.isArray(videoIds) || videoIds.length === 0) {
+      return next(new AppError('Please select at least one video for bulk generation', 400));
+    }
+
+    const result = await aiService.processBatch({
+      videoIds,
+      language,
+      concurrency: Math.min(Math.max(parseInt(concurrency, 10) || 2, 1), 4),
+      retryFailedOnly,
+    });
+
+    res.json({
+      status: 'success',
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 4. Get active or recent Bulk AI job progress
+router.get('/bulk/progress', async (req, res, next) => {
+  try {
+    const { jobId } = req.query;
+    const progress = await aiService.getBulkProgress(jobId);
+    res.json({
+      status: 'success',
+      data: progress,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 5. Cancel running Bulk AI job
+router.post('/bulk/cancel', async (req, res, next) => {
+  try {
+    const { jobId } = req.body;
+    const cancelledJob = await aiService.cancelBulkJob(jobId);
+    res.json({
+      status: 'success',
+      message: 'Bulk AI generation job cancelled successfully',
+      data: cancelledJob,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 6. Manual editing and draft approval workflow
+router.patch('/draft/:videoId', async (req, res, next) => {
+  try {
+    const { videoId } = req.params;
+    const {
+      youtubeTitle,
+      instagramCaption,
+      hook,
+      description,
+      cta,
+      hashtags,
+      category,
+      language,
+      approvalStatus,
+    } = req.body;
+
+    const video = await Video.findById(videoId);
+    if (!video) {
+      return next(new AppError('Video not found', 404));
+    }
+
+    if (!video.aiMetadata) {
+      video.aiMetadata = {};
+    }
+
+    if (youtubeTitle !== undefined) {
+      video.aiMetadata.youtubeTitle = youtubeTitle;
+      video.aiMetadata.generatedTitle = youtubeTitle;
+    }
+    if (instagramCaption !== undefined) video.aiMetadata.instagramCaption = instagramCaption;
+    if (hook !== undefined) video.aiMetadata.hook = hook;
+    if (description !== undefined) video.aiMetadata.description = description;
+    if (cta !== undefined) video.aiMetadata.cta = cta;
+    if (category !== undefined) video.aiMetadata.category = category;
+    if (language !== undefined) video.aiMetadata.language = language;
+
+    if (hashtags !== undefined) {
+      video.aiMetadata.hashtags = Array.isArray(hashtags)
+        ? hashtags
+        : String(hashtags).split(/[\s,]+/).filter(Boolean);
+    }
+
+    if (approvalStatus && ['draft', 'approved', 'rejected'].includes(approvalStatus)) {
+      video.aiMetadata.approvalStatus = approvalStatus;
+      if (approvalStatus === 'approved') {
+        video.aiMetadata.approvedAt = new Date();
+      }
+    }
+
+    video.aiMetadata.lastEditedAt = new Date();
+    await video.save();
+
+    res.json({
+      status: 'success',
+      data: {
+        videoId: video._id,
+        aiMetadata: video.aiMetadata,
+        status: video.status,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+export default router;

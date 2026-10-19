@@ -1,0 +1,57 @@
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Load .env from backend folder or root folder
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+
+export const config = {
+  port: parseInt(process.env.PORT || '5000', 10),
+  nodeEnv: process.env.NODE_ENV || 'development',
+  clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
+
+  // Database
+  mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/video_automation',
+
+  // Encryption for tokens (32-byte key)
+  encryptionKey: process.env.ENCRYPTION_KEY || 'default_insecure_key_must_change_in_production_32b!',
+
+  // Dashboard API Key for sensitive administrative operations
+  dashboardApiKey: process.env.DASHBOARD_API_KEY || '',
+
+  // AI Configuration
+  ai: {
+    provider: process.env.AI_PROVIDER || 'gemini', // 'gemini' | 'ollama' | 'manual'
+    geminiApiKey: process.env.GEMINI_API_KEY || '',
+    geminiModel: process.env.GEMINI_MODEL || 'gemini-1.5-flash',
+    ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
+    ollamaModel: process.env.OLLAMA_MODEL || 'llama3.2',
+  },
+
+  // Google APIs (Drive & YouTube)
+  google: {
+    clientId: process.env.GOOGLE_CLIENT_ID || '',
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+    redirectUri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/accounts/google/callback',
+    driveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID || '',
+  },
+
+  // Meta / Instagram Graph API & Instagram Login
+  meta: {
+    appId: process.env.INSTAGRAM_APP_ID || process.env.META_APP_ID || '',
+    appSecret: process.env.INSTAGRAM_APP_SECRET || process.env.META_APP_SECRET || '',
+    redirectUri: process.env.META_REDIRECT_URI || 'http://localhost:5000/api/accounts/meta/callback',
+    authFlow: process.env.META_AUTH_FLOW || 'instagram_login', // 'instagram_login' | 'facebook_login'
+  },
+
+  // n8n
+  n8n: {
+    webhookUrl: process.env.N8N_WEBHOOK_URL || 'http://127.0.0.1:5678/webhook/video-pipeline',
+    apiKey: process.env.N8N_API_KEY || '',
+    webhookSecret: process.env.N8N_WEBHOOK_SECRET || 'video_automation_n8n_secret_default',
+  },
+};
