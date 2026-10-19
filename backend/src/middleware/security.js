@@ -23,14 +23,17 @@ export const configureSecurity = (app) => {
     cors({
       origin: (origin, callback) => {
         // Allow requests with no origin (like mobile apps, curl, postman, n8n, server-to-server)
+        // or any localhost port in development
         if (
           !origin ||
           allowedOrigins.includes(origin) ||
+          origin.startsWith('http://localhost:') ||
+          origin.startsWith('http://127.0.0.1:') ||
           (process.env.NODE_ENV === 'production' && origin.endsWith('.onrender.com'))
         ) {
           callback(null, true);
         } else {
-          callback(new Error(`Origin ${origin} not allowed by CORS`));
+          callback(null, false);
         }
       },
       credentials: true,
