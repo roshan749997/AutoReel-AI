@@ -12,8 +12,9 @@ export const configureSecurity = (app) => {
   );
 
   // CORS configuration
+  const clientUrls = (config.clientUrl || '').split(',').map((u) => u.trim()).filter(Boolean);
   const allowedOrigins = [
-    config.clientUrl,
+    ...clientUrls,
     'http://localhost:5173',
     'http://127.0.0.1:5173',
   ];
@@ -21,8 +22,12 @@ export const configureSecurity = (app) => {
   app.use(
     cors({
       origin: (origin, callback) => {
-        // Allow requests with no origin (like mobile apps, curl, postman, n8n)
-        if (!origin || allowedOrigins.includes(origin)) {
+        // Allow requests with no origin (like mobile apps, curl, postman, n8n, server-to-server)
+        if (
+          !origin ||
+          allowedOrigins.includes(origin) ||
+          (process.env.NODE_ENV === 'production' && origin.endsWith('.onrender.com'))
+        ) {
           callback(null, true);
         } else {
           callback(new Error(`Origin ${origin} not allowed by CORS`));
@@ -30,7 +35,7 @@ export const configureSecurity = (app) => {
       },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-api-key'],
     })
   );
 };
