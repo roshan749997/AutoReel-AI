@@ -1661,10 +1661,10 @@ export const VideoLibraryModule = ({
                 }}
                 className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-300 focus:outline-none text-xs"
               >
-                <option value="">Status: All</option>
+                <option value="">Status: Available (Hide Queued)</option>
                 <option value="discovered">Discovered</option>
                 <option value="metadata_ready">Metadata Ready</option>
-                <option value="queued">Queued</option>
+                <option value="queued">Queued (In Publishing Queue)</option>
                 <option value="published">Published</option>
               </select>
 

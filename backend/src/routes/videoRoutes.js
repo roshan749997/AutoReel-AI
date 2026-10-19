@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { Video } from '../models/Video.js';
+import { Post } from '../models/Post.js';
 import { Account } from '../models/Account.js';
 import { SyncJob } from '../models/SyncJob.js';
 import { googleDriveService } from '../services/googleDriveService.js';
@@ -165,11 +166,48 @@ router.get('/', async (req, res, next) => {
       });
     }
 
+    // Fetch video IDs currently active in the publishing queue
+    const activeQueuedPostVideoIds = await Post.distinct('videoId', {
+      status: { $in: ['scheduled', 'queued', 'processing', 'retrying'] },
+    });
+
+    // Self-heal: If any video is marked 'queued' but has NO active posts in queue, release it back to library
+    await Video.updateMany(
+      {
+        status: 'queued',
+        _id: { $nin: activeQueuedPostVideoIds },
+      },
+      {
+        $set: { status: 'metadata_ready' },
+      }
+    );
+
     const andConditions = [{ isArchived: false }, driveInfo.accountFilter];
 
-    // Status filter
+    // Status filter:
     if (req.query.status) {
-      andConditions.push({ status: req.query.status });
+      if (req.query.status === 'queued') {
+        // User explicitly clicked "Queued" in ribbon or dropdown
+        andConditions.push({
+          $or: [
+            { status: 'queued' },
+            ...(activeQueuedPostVideoIds.length > 0 ? [{ _id: { $in: activeQueuedPostVideoIds } }] : []),
+          ],
+        });
+      } else {
+        andConditions.push({ status: req.query.status });
+        // Exclude active queued videos from other status queries
+        andConditions.push({ status: { $ne: 'queued' } });
+        if (activeQueuedPostVideoIds.length > 0) {
+          andConditions.push({ _id: { $nin: activeQueuedPostVideoIds } });
+        }
+      }
+    } else {
+      // Default Video Library view: DO NOT SHOW videos that are in the publishing queue!
+      andConditions.push({ status: { $ne: 'queued' } });
+      if (activeQueuedPostVideoIds.length > 0) {
+        andConditions.push({ _id: { $nin: activeQueuedPostVideoIds } });
+      }
     }
 
     // Indexing status filter
@@ -331,17 +369,34 @@ router.get('/stats', async (req, res, next) => {
       });
     }
 
-    const baseFilter = { $and: [{ isArchived: false }, driveInfo.accountFilter] };
+    const activeQueuedPostVideoIds = await Post.distinct('videoId', {
+      status: { $in: ['scheduled', 'queued', 'processing', 'retrying'] },
+    });
+
+    const notQueuedFilter = {
+      status: { $ne: 'queued' },
+      ...(activeQueuedPostVideoIds.length > 0 ? { _id: { $nin: activeQueuedPostVideoIds } } : {}),
+    };
+
+    const queuedFilter = {
+      $or: [
+        { status: 'queued' },
+        ...(activeQueuedPostVideoIds.length > 0 ? [{ _id: { $in: activeQueuedPostVideoIds } }] : []),
+      ],
+    };
+
+    const baseFilter = { $and: [{ isArchived: false }, driveInfo.accountFilter, notQueuedFilter] };
 
     const [total, approved, draft, vertical, queued, published] = await Promise.all([
       Video.countDocuments(baseFilter),
       Video.countDocuments({
-        $and: [{ isArchived: false }, driveInfo.accountFilter, { 'aiMetadata.approvalStatus': 'approved' }],
+        $and: [{ isArchived: false }, driveInfo.accountFilter, notQueuedFilter, { 'aiMetadata.approvalStatus': 'approved' }],
       }),
       Video.countDocuments({
         $and: [
           { isArchived: false },
           driveInfo.accountFilter,
+          notQueuedFilter,
           {
             'aiMetadata.approvalStatus': 'draft',
             'aiMetadata.generatedTitle': { $exists: true, $ne: '' },
@@ -349,10 +404,10 @@ router.get('/stats', async (req, res, next) => {
         ],
       }),
       Video.countDocuments({
-        $and: [{ isArchived: false }, driveInfo.accountFilter, { 'resolution.isVertical': true }],
+        $and: [{ isArchived: false }, driveInfo.accountFilter, notQueuedFilter, { 'resolution.isVertical': true }],
       }),
       Video.countDocuments({
-        $and: [{ isArchived: false }, driveInfo.accountFilter, { status: 'queued' }],
+        $and: [{ isArchived: false }, driveInfo.accountFilter, queuedFilter],
       }),
       Video.countDocuments({
         $and: [{ isArchived: false }, driveInfo.accountFilter, { status: 'published' }],

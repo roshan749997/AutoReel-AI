@@ -436,6 +436,21 @@ router.delete('/purge/all', requireAdminAuth, async (req, res, next) => {
     }
 
     const result = await Post.deleteMany(filter);
+
+    // Sync any videos whose active queued posts were removed
+    const activeQueuedPostVideoIds = await Post.distinct('videoId', {
+      status: { $in: ['scheduled', 'queued', 'processing', 'retrying'] },
+    });
+    await Video.updateMany(
+      {
+        status: 'queued',
+        _id: { $nin: activeQueuedPostVideoIds },
+      },
+      {
+        $set: { status: 'metadata_ready' },
+      }
+    );
+
     res.json({
       status: 'success',
       message: `Successfully cleared ${result.deletedCount} post(s) from publishing queue`,
@@ -451,6 +466,19 @@ router.delete('/:id', requireAdminAuth, async (req, res, next) => {
   try {
     const post = await Post.findByIdAndDelete(req.params.id);
     if (!post) return next(new AppError('Post not found', 404));
+
+    // Check if video still has any active posts in queue
+    const remainingActive = await Post.countDocuments({
+      videoId: post.videoId,
+      status: { $in: ['scheduled', 'queued', 'processing', 'retrying'] },
+    });
+    if (remainingActive === 0) {
+      const video = await Video.findById(post.videoId);
+      if (video && video.status === 'queued') {
+        video.status = video.aiMetadata?.generatedTitle ? 'metadata_ready' : 'discovered';
+        await video.save();
+      }
+    }
 
     res.json({ status: 'success', message: 'Post removed from publishing queue' });
   } catch (err) {
