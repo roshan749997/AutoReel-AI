@@ -74,6 +74,7 @@ export const api = {
     const query = new URLSearchParams(params).toString();
     return request(`/videos/folders/summary${query ? `?${query}` : ''}`);
   },
+  getVideoFolderTree: () => request('/videos/folders/tree'),
   getVideoStats: (params = {}) => {
     const query = new URLSearchParams(params).toString();
     return request(`/videos/stats${query ? `?${query}` : ''}`);

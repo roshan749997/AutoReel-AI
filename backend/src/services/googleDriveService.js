@@ -380,6 +380,7 @@ export class GoogleDriveService {
     }
 
     const visitedFolders = new Set(job.foldersCompleted);
+    const folderCache = new Map();
 
     try {
       while (folderQueue.length > 0 && pagesThisRun < maxPages) {
@@ -398,6 +399,10 @@ export class GoogleDriveService {
         if (currentFolderId && currentFolderId !== 'root') {
           query += ` and '${currentFolderId}' in parents`;
         }
+
+        const folderTrail = await this.folderTrail(drive, folderCache, currentFolderId, {
+          name: currentFolderId === job.folderId ? job.folderName : undefined,
+        });
 
         do {
           if (this.isCancelled(jobId)) {
@@ -449,7 +454,9 @@ export class GoogleDriveService {
                       thumbnailUrl: file.thumbnailLink || null,
                       driveWebViewLink: file.webViewLink || null,
                       folderId: currentFolderId || job.folderId,
-                      folderName: job.folderName,
+                      folderName: folderTrail.names[folderTrail.names.length - 1] || job.folderName,
+                      folderPathIds: folderTrail.ids,
+                      folderPathNames: folderTrail.names,
                       syncJobId: jobId,
                       indexingStatus: 'indexed',
                       ...(syncAccount?._id || this.currentAccount?._id
@@ -495,19 +502,9 @@ export class GoogleDriveService {
 
         // If recursive traversal requested, discover child folders
         if (recursive && currentFolderId) {
-          const childFolderQuery = `mimeType = 'application/vnd.google-apps.folder' and trashed = false and '${currentFolderId}' in parents`;
-          const childRes = await this.retryWithBackoff(async () => {
-            return await drive.files.list({
-              q: childFolderQuery,
-              fields: 'files(id, name)',
-              pageSize: 50,
-              supportsAllDrives: true,
-              includeItemsFromAllDrives: true,
-            });
-          });
-
-          const subfolders = childRes.data.files || [];
+          const subfolders = await this.listChildFolders(drive, currentFolderId);
           for (const sub of subfolders) {
+            folderCache.set(sub.id, { name: sub.name, parentId: currentFolderId, resolved: true });
             if (!visitedFolders.has(sub.id) && !folderQueue.includes(sub.id)) {
               folderQueue.push(sub.id);
               if (!job.foldersDiscovered.includes(sub.id)) {
@@ -553,6 +550,210 @@ export class GoogleDriveService {
     } finally {
       this.activeJobs.delete(jobId);
     }
+  }
+
+  async listChildFolders(drive, folderId) {
+    const items = [];
+    let pageToken;
+    const parent = folderId && folderId !== 'root' ? `'${folderId}' in parents` : `'root' in parents`;
+    do {
+      const response = await this.retryWithBackoff(async () => {
+        return drive.files.list({
+          q: `mimeType = 'application/vnd.google-apps.folder' and trashed = false and ${parent}`,
+          fields: 'nextPageToken, files(id, name)',
+          pageSize: 100,
+          pageToken: pageToken || undefined,
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true,
+        });
+      });
+      items.push(...(response.data.files || []));
+      pageToken = response.data.nextPageToken || null;
+    } while (pageToken && items.length < 300);
+    return items;
+  }
+
+  async rememberFolder(drive, cache, folderId, known = {}) {
+    if (!folderId || folderId === 'root') return null;
+    const existing = cache.get(folderId);
+    if (existing?.resolved) return existing;
+
+    if (known.name && known.parentId !== undefined) {
+      const node = { name: known.name, parentId: known.parentId || null, resolved: true };
+      cache.set(folderId, node);
+      return node;
+    }
+
+    try {
+      const info = await this.retryWithBackoff(async () => {
+        return drive.files.get({
+          fileId: folderId,
+          fields: 'id, name, parents',
+          supportsAllDrives: true,
+        });
+      });
+      const node = {
+        name: info.data.name || known.name || 'Folder',
+        parentId: info.data.parents?.[0] || null,
+        resolved: true,
+      };
+      cache.set(folderId, node);
+      return node;
+    } catch {
+      const node = {
+        name: known.name || existing?.name || 'Folder',
+        parentId: known.parentId || null,
+        resolved: true,
+      };
+      cache.set(folderId, node);
+      return node;
+    }
+  }
+
+  async folderTrail(drive, cache, folderId, known = {}) {
+    const ids = [];
+    const names = [];
+    const seen = new Set();
+    let current = folderId;
+    if (known.name) {
+      await this.rememberFolder(drive, cache, folderId, known.parentId !== undefined ? known : {});
+    }
+    while (current && current !== 'root' && !seen.has(current) && ids.length < 12) {
+      seen.add(current);
+      const node = await this.rememberFolder(drive, cache, current, current === folderId ? known : {});
+      const parentId = node?.parentId || null;
+      if (!parentId) {
+        if (ids.length === 0) {
+          ids.unshift(current);
+          names.unshift(node?.name || 'My Drive');
+        }
+        break;
+      }
+      ids.unshift(current);
+      names.unshift(node?.name || 'Folder');
+      current = parentId;
+    }
+    if (ids.length === 0 && folderId) {
+      return { ids: [folderId], names: [known.name || 'Folder'] };
+    }
+    return { ids, names };
+  }
+
+  async repairStoredFolderPaths() {
+    const drive = await this.getAuthenticatedClient();
+    const cache = new Map();
+    const folderIds = await Video.distinct('folderId', {
+      isArchived: false,
+      folderId: { $exists: true, $nin: [null, ''] },
+      $or: [
+        { folderPathNames: { $exists: false } },
+        { folderPathNames: { $size: 0 } },
+        { folderName: 'My Drive' },
+        { 'folderPathNames.0': 'My Drive' },
+      ],
+    });
+
+    for (const folderId of folderIds) {
+      const trail = await this.folderTrail(drive, cache, folderId);
+      if (!trail.names.length) continue;
+      await Video.updateMany(
+        { folderId, isArchived: false },
+        {
+          $set: {
+            folderName: trail.names[trail.names.length - 1],
+            folderPathIds: trail.ids,
+            folderPathNames: trail.names,
+          },
+        }
+      );
+    }
+  }
+
+  async listFolderTree() {
+    const now = Date.now();
+    if (this.folderTreeCache && now - this.folderTreeCachedAt < 15000) {
+      return this.folderTreeCache;
+    }
+
+    try {
+      await this.repairStoredFolderPaths();
+    } catch (err) {
+      console.warn(`[GoogleDriveService] Folder path repair skipped: ${err.message}`);
+    }
+
+    const counts = await Video.aggregate([
+      { $match: { isArchived: false, folderId: { $exists: true, $nin: [null, ''] } } },
+      { $group: { _id: '$folderId', count: { $sum: 1 } } },
+    ]);
+    const countMap = new Map(counts.map((row) => [String(row._id), row.count]));
+
+    let tree = [];
+    try {
+      const drive = await this.getAuthenticatedClient();
+      const roots = await this.listChildFolders(drive, 'root');
+      const build = async (nodes, depth) => {
+        const built = [];
+        for (const node of nodes) {
+          const children = depth < 6 ? await this.listChildFolders(drive, node.id) : [];
+          const childNodes = await build(children, depth + 1);
+          const count = countMap.get(node.id) || 0;
+          built.push({
+            id: node.id,
+            name: node.name,
+            count,
+            total: count + childNodes.reduce((sum, child) => sum + child.total, 0),
+            children: childNodes.sort((a, b) => a.name.localeCompare(b.name)),
+          });
+        }
+        return built.sort((a, b) => a.name.localeCompare(b.name));
+      };
+      tree = await build(roots, 0);
+    } catch (err) {
+      console.warn(`[GoogleDriveService] Drive folder tree unavailable: ${err.message}`);
+      tree = await this.folderTreeFromDatabase();
+    }
+
+    this.folderTreeCache = tree;
+    this.folderTreeCachedAt = now;
+    return tree;
+  }
+
+  async folderTreeFromDatabase() {
+    const rows = await Video.aggregate([
+      { $match: { isArchived: false, folderName: { $exists: true, $ne: '' } } },
+      {
+        $group: {
+          _id: '$folderId',
+          folderName: { $first: '$folderName' },
+          folderPathIds: { $first: '$folderPathIds' },
+          folderPathNames: { $first: '$folderPathNames' },
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+    const nodes = new Map();
+    for (const row of rows) {
+      const ids = row.folderPathIds?.length ? row.folderPathIds : [row._id];
+      const names = row.folderPathNames?.length ? row.folderPathNames : [row.folderName || 'Folder'];
+      ids.forEach((id, index) => {
+        if (!id || nodes.has(id)) return;
+        nodes.set(id, { id, name: names[index] || 'Folder', parentId: index > 0 ? ids[index - 1] : null, count: 0, children: [] });
+      });
+      const leaf = nodes.get(row._id);
+      if (leaf) leaf.count += row.count;
+    }
+    const roots = [];
+    for (const node of nodes.values()) {
+      if (node.parentId && nodes.has(node.parentId)) nodes.get(node.parentId).children.push(node);
+      else roots.push(node);
+    }
+    const withTotal = (node) => {
+      node.children.sort((a, b) => a.name.localeCompare(b.name));
+      node.children.forEach(withTotal);
+      node.total = node.count + node.children.reduce((sum, child) => sum + child.total, 0);
+    };
+    roots.forEach(withTotal);
+    return roots.sort((a, b) => a.name.localeCompare(b.name));
   }
 
   isCancelled(jobId) {

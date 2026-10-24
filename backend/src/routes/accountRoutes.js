@@ -6,6 +6,7 @@ import { WorkflowLog } from '../models/WorkflowLog.js';
 import { youtubeService } from '../services/youtubeService.js';
 import { instagramService } from '../services/instagramService.js';
 import { verifyOAuthState } from '../services/cryptoService.js';
+import { verifyTransferState, exchangeAuthCode } from '../drive-transfer/oauth.js';
 import { requireAdminAuth } from '../middleware/auth.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { config } from '../config/env.js';
@@ -122,6 +123,21 @@ router.get('/google/callback', async (req, res, next) => {
       return res.redirect(
         `${config.clientUrl}/accounts?error=${encodeURIComponent(msg)}&error_code=${encodeURIComponent(error)}`
       );
+    }
+    if (state && verifyTransferState(state)) {
+      if (!code) {
+        return res.redirect(
+          `${config.clientUrl}/?tab=drive-transfer&dt_status=error&dt_error=${encodeURIComponent('Missing authorization code.')}`
+        );
+      }
+      try {
+        await exchangeAuthCode(code);
+        return res.redirect(`${config.clientUrl}/?tab=drive-transfer&dt_status=connected`);
+      } catch (transferErr) {
+        return res.redirect(
+          `${config.clientUrl}/?tab=drive-transfer&dt_status=error&dt_error=${encodeURIComponent(transferErr.message || 'Drive Transfer sign-in failed')}`
+        );
+      }
     }
     if (!state || !verifyOAuthState(state, 'youtube')) {
       return res.redirect(

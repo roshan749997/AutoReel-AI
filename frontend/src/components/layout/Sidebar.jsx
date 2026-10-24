@@ -2,6 +2,7 @@ import React from 'react';
 import {
   LayoutDashboard,
   Users2,
+  Folders,
   Film,
   CheckCircle2,
   ListVideo,
@@ -10,17 +11,20 @@ import {
   ScrollText,
   Activity,
   Sparkles,
+  FolderInput,
 } from 'lucide-react';
 
 const navItems = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'accounts', label: 'Social Accounts', icon: Users2 },
+  { id: 'channels', label: 'Channels', icon: Folders },
   { id: 'library', label: 'Video Library', icon: Film, badge: '20k+' },
   { id: 'published', label: 'Published Videos', icon: CheckCircle2, badge: 'Live' },
   { id: 'queue', label: 'Publishing Queue', icon: ListVideo },
   { id: 'calendar', label: 'Calendar', icon: Calendar },
   { id: 'automation', label: 'Automation (n8n)', icon: Cpu },
   { id: 'logs', label: 'Activity Logs', icon: ScrollText },
+  { id: 'drive-transfer', label: 'Drive Transfer', icon: FolderInput },
 ];
 
 export const Sidebar = ({ activeTab, onSelectTab, isMobileOpen, onCloseMobile, systemStatus }) => {

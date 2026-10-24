@@ -6,11 +6,13 @@ import { Badge } from '../common/Badge.jsx';
 const titleMap = {
   overview: { title: 'Dashboard Overview', desc: 'Central command for accounts, queue, and content workflows' },
   accounts: { title: 'Social Accounts', desc: 'Manage official YouTube Data API & Meta Instagram Graph API connections' },
+  channels: { title: 'Channels', desc: 'One Drive folder, one YouTube channel, and one Instagram account' },
   library: { title: 'Google Drive Video Library', desc: 'Catalog and stream 20,000+ videos directly from Drive' },
-  queue: { title: 'Publishing Queue', desc: 'Scheduled reels and shorts awaiting official API dispatch' },
+  queue: { title: 'Publishing Queue', desc: 'See which video is going to which YouTube or Instagram channel' },
   calendar: { title: 'Publishing Calendar', desc: 'Timeline view of scheduled and published content' },
   automation: { title: 'Automation Workflows', desc: 'Self-hosted n8n pipeline orchestration on 127.0.0.1' },
   logs: { title: 'System Activity Logs', desc: 'Audit trail for syncing, AI generation, and publishing attempts' },
+  'drive-transfer': { title: 'Drive Transfer', desc: 'Copy a Google Drive folder into another folder' },
 };
 
 export const Header = ({ activeTab, onOpenMobile, onRefresh, isRefreshing, systemStatus }) => {

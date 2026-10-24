@@ -186,7 +186,9 @@ router.get('/', async (req, res, next) => {
 
     // Status filter:
     if (req.query.status) {
-      if (req.query.status === 'queued') {
+      if (req.query.status === 'all') {
+        // Include queued and published videos. Used by the per-channel board.
+      } else if (req.query.status === 'queued') {
         // User explicitly asked for Queued videos
         andConditions.push({
           $or: [
@@ -252,7 +254,9 @@ router.get('/', async (req, res, next) => {
 
     // Target folder filter
     if (req.query.folderId) {
-      andConditions.push({ folderId: req.query.folderId });
+      andConditions.push({
+        $or: [{ folderId: req.query.folderId }, { folderPathIds: req.query.folderId }],
+      });
     }
 
     // Search query (clean title, original filename, or notes)
@@ -341,12 +345,24 @@ router.get('/folders/summary', async (req, res, next) => {
         $group: {
           _id: '$folderId',
           folderName: { $first: '$folderName' },
+          folderPathIds: { $first: '$folderPathIds' },
+          folderPathNames: { $first: '$folderPathNames' },
           count: { $sum: 1 },
         },
       },
       { $sort: { count: -1 } },
     ]);
     res.json({ status: 'success', data: folders });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 6b2. Live Drive folder tree, including subfolders that have no videos yet
+router.get('/folders/tree', async (req, res, next) => {
+  try {
+    const tree = await googleDriveService.listFolderTree();
+    res.json({ status: 'success', data: tree });
   } catch (err) {
     next(err);
   }

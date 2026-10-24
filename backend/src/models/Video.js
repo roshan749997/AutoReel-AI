@@ -52,6 +52,8 @@ const videoSchema = new mongoose.Schema(
     driveWebViewLink: String,
     folderId: String,
     folderName: String,
+    folderPathIds: { type: [String], default: [] },
+    folderPathNames: { type: [String], default: [] },
     aiMetadata: {
       generatedTitle: String,
       youtubeTitle: String,
@@ -108,6 +110,7 @@ const videoSchema = new mongoose.Schema(
 videoSchema.index({ originalName: 'text', cleanTitle: 'text' });
 videoSchema.index({ status: 1, driveModifiedAt: -1 });
 videoSchema.index({ folderId: 1, driveModifiedAt: -1 });
+videoSchema.index({ folderPathIds: 1 });
 videoSchema.index({ fileSize: 1 });
 videoSchema.index({ 'resolution.isVertical': 1 });
 

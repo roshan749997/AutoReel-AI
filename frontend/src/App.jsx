@@ -4,18 +4,23 @@ import { Header } from './components/layout/Header.jsx';
 import { StatusBanner } from './components/layout/StatusBanner.jsx';
 import { OverviewModule } from './components/modules/OverviewModule.jsx';
 import { SocialAccountsModule } from './components/modules/SocialAccountsModule.jsx';
+import { ChannelsModule } from './components/modules/ChannelsModule.jsx';
 import { VideoLibraryModule } from './components/modules/VideoLibraryModule.jsx';
 import { PublishedVideosModule } from './components/modules/PublishedVideosModule.jsx';
 import { PublishingQueueModule } from './components/modules/PublishingQueueModule.jsx';
 import { CalendarModule } from './components/modules/CalendarModule.jsx';
 import { AutomationModule } from './components/modules/AutomationModule.jsx';
 import { LogsModule } from './components/modules/LogsModule.jsx';
+import { DriveTransferModule } from './components/modules/DriveTransferModule.jsx';
 import { api } from './api/client.js';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 
 const getInitialTab = () => {
   if (typeof window !== 'undefined') {
     const params = new URLSearchParams(window.location.search);
+    if (params.get('tab') === 'drive-transfer') {
+      return 'drive-transfer';
+    }
     if (params.has('error') || params.has('connected') || params.has('error_code')) {
       return 'accounts';
     }
@@ -197,6 +202,14 @@ export default function App() {
                 />
               )}
 
+              {activeTab === 'channels' && (
+                <ChannelsModule
+                  accounts={accounts}
+                  posts={posts}
+                  onNavigate={setActiveTab}
+                />
+              )}
+
               {activeTab === 'library' && (
                 <VideoLibraryModule
                   videos={videos}
@@ -251,6 +264,10 @@ export default function App() {
                   pagination={{ page: logFilters.page, limit: logFilters.limit }}
                   onFilterChange={(f) => setLogFilters((prev) => ({ ...prev, ...f, page: 1 }))}
                 />
+              )}
+
+              {activeTab === 'drive-transfer' && (
+                <DriveTransferModule />
               )}
             </div>
           )}

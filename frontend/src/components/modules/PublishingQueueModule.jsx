@@ -28,7 +28,8 @@ import { Modal } from '../common/Modal.jsx';
 import { api } from '../../api/client.js';
 
 export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onNavigate }) => {
-  const [filterStatus, setFilterStatus] = useState('all');
+  const [filterStatus, setFilterStatus] = useState('upcoming');
+  const [showUnlinked, setShowUnlinked] = useState(false);
   const [accountFilter, setAccountFilter] = useState('all');
   const [platformFilter, setPlatformFilter] = useState('all');
   const [activeLogPost, setActiveLogPost] = useState(null);
@@ -47,20 +48,19 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
     timezone: 'UTC',
   });
 
-  const statuses = [
-    'all',
-    'scheduled',
-    'queued',
-    'processing',
-    'retrying',
-    'paused',
-    'failed',
-    'cancelled',
-    'published',
-  ];
+  const upcomingStatuses = ['scheduled', 'queued', 'processing', 'retrying', 'paused'];
+  const statusLabels = {
+    upcoming: 'To publish',
+    all: 'All',
+    failed: 'Failed',
+    published: 'Done',
+    cancelled: 'Cancelled',
+    paused: 'Paused',
+  };
 
   const filteredPosts = posts.filter((p) => {
-    if (filterStatus !== 'all' && p.status !== filterStatus) return false;
+    if (filterStatus === 'upcoming' && !upcomingStatuses.includes(p.status)) return false;
+    if (filterStatus !== 'upcoming' && filterStatus !== 'all' && p.status !== filterStatus) return false;
     if (platformFilter !== 'all' && p.platform !== platformFilter) return false;
     if (accountFilter !== 'all') {
       const accId = p.accountId?._id || p.accountId;
@@ -68,6 +68,24 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
     }
     return true;
   });
+
+  const accountGroups = [];
+  const seenAccounts = new Map();
+  for (const post of filteredPosts) {
+    const id = String(post.accountId?._id || post.accountId || 'unknown');
+    let group = seenAccounts.get(id);
+    if (!group) {
+      group = {
+        id,
+        name: post.accountId?.accountName || accounts.find((account) => account._id === (post.accountId?._id || post.accountId))?.accountName || 'No channel linked',
+        platform: post.accountId?.platform || post.platform,
+        posts: [],
+      };
+      seenAccounts.set(id, group);
+      accountGroups.push(group);
+    }
+    group.posts.push(post);
+  }
 
   // Action handlers
   const handlePause = async (id) => {
@@ -208,7 +226,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
   };
 
   const handlePublishNow = async (id) => {
-    if (!window.confirm('Dispatch and publish this post to YouTube now?')) return;
+    if (!window.confirm('Publish this post now?')) return;
     try {
       setIsActionLoading(true);
       const res = await api.publishNow(id);
@@ -224,7 +242,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
   const getStatusBadge = (status) => {
     switch (status) {
       case 'published':
-        return <Badge variant="success" dot className="capitalize text-[10px]">Published</Badge>;
+        return <Badge variant="success" dot className="capitalize text-[10px]">Done</Badge>;
       case 'manual_review':
         return <Badge variant="warning" dot className="capitalize text-[10px] text-amber-300 bg-amber-950/40 border-amber-500/30">Manual Review</Badge>;
       case 'failed':
@@ -232,16 +250,17 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
       case 'retrying':
         return <Badge variant="warning" dot className="capitalize text-[10px]">Retrying</Badge>;
       case 'processing':
-        return <Badge variant="info" dot className="capitalize text-[10px]">Processing</Badge>;
+        return <Badge variant="info" dot className="capitalize text-[10px]">Uploading</Badge>;
       case 'paused':
         return <Badge variant="neutral" dot className="capitalize text-[10px]">Paused</Badge>;
       case 'cancelled':
         return <Badge variant="neutral" dot className="capitalize text-[10px]">Cancelled</Badge>;
       case 'queued':
-        return <Badge variant="info" dot className="capitalize text-[10px]">Queued (Ready)</Badge>;
+        return <Badge variant="info" dot className="capitalize text-[10px]">Ready</Badge>;
       case 'scheduled':
+        return <Badge variant="info" dot className="capitalize text-[10px]">Waiting</Badge>;
       default:
-        return <Badge variant="info" dot className="capitalize text-[10px]">Scheduled</Badge>;
+        return <Badge variant="info" dot className="capitalize text-[10px]">{status}</Badge>;
     }
   };
 
@@ -252,9 +271,9 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
         <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold text-slate-100">Smart Publishing Queue & Orchestrator</h3>
+              <h3 className="text-sm font-semibold text-slate-100">Where each video is going</h3>
               <span className="text-xs px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400">
-                {posts.length} Total Jobs
+                {posts.length} posts
               </span>
               {posts.length > 0 && (
                 <button
@@ -270,25 +289,32 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
               )}
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Timezone-aware scheduling with bounded queue workers, retry backoff, and n8n webhook orchestration
+              One row is one upload. The channel name is the account that will receive that video.
             </p>
           </div>
 
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
             <div className="flex flex-wrap items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs max-w-full overflow-x-auto">
-              {statuses.map((st) => (
-                <button
-                  key={st}
-                  onClick={() => setFilterStatus(st)}
-                  className={`px-2 py-1 rounded-md font-medium capitalize text-[11px] transition-colors whitespace-nowrap ${
-                    filterStatus === st
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-850'
-                  }`}
-                >
-                  {st}
-                </button>
-              ))}
+              {Object.entries(statusLabels).map(([id, label]) => {
+                const count = posts.filter((post) => {
+                  if (id === 'all') return true;
+                  if (id === 'upcoming') return upcomingStatuses.includes(post.status);
+                  return post.status === id;
+                }).length;
+                return (
+                  <button
+                    key={id}
+                    onClick={() => setFilterStatus(id)}
+                    className={`px-2 py-1 rounded-md font-medium text-[11px] transition-colors whitespace-nowrap ${
+                      filterStatus === id
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-850'
+                    }`}
+                  >
+                    {label} {count}
+                  </button>
+                );
+              })}
             </div>
 
             <div className="flex items-center gap-1.5">
@@ -324,21 +350,41 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
       {/* 2. Posts List */}
       <Card>
         <CardHeader
-          title="Scheduled Dispatches"
-          subtitle={`${filteredPosts.length} post${filteredPosts.length === 1 ? '' : 's'} in current view`}
+          title="Posts by channel"
+          subtitle={`${filteredPosts.length} showing. Open a channel to see its videos.`}
         />
 
         {filteredPosts.length === 0 ? (
           <EmptyState
             icon={ListVideo}
-            title="Queue is empty"
-            description="There are no posts matching this status filter. Select approved videos from your library to schedule new posts."
+            title="Nothing in this view"
+            description="No posts match this filter. To publish shows videos that are still waiting. All shows finished posts too."
             actionLabel="Browse Video Library"
             onAction={() => onNavigate('library')}
           />
         ) : (
-          <div className="space-y-3">
-            {filteredPosts.map((post) => {
+          <div className="space-y-6">
+            {accountGroups.filter((group) => group.name !== 'No channel linked').map((group) => (
+              <section key={group.id} className="space-y-3">
+                <div className="flex items-center justify-between gap-3 px-1">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div
+                      className={`w-7 h-7 rounded-lg flex items-center justify-center border ${
+                        group.platform === 'youtube'
+                          ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                          : 'bg-pink-500/10 text-pink-400 border-pink-500/20'
+                      }`}
+                    >
+                      {group.platform === 'youtube' ? <Youtube className="w-3.5 h-3.5" /> : <Instagram className="w-3.5 h-3.5" />}
+                    </div>
+                    <div className="min-w-0">
+                      <h4 className="text-xs font-semibold text-slate-100 truncate">Going to {group.name}</h4>
+                      <p className="text-[10px] uppercase tracking-wide text-slate-500">{group.platform === 'youtube' ? 'YouTube' : 'Instagram'}</p>
+                    </div>
+                  </div>
+                  <span className="text-[11px] text-slate-500 shrink-0">{group.posts.length} videos</span>
+                </div>
+            {group.posts.map((post) => {
               const isYt = post.platform === 'youtube';
               const isPaused = post.status === 'paused';
               const isCancelled = post.status === 'cancelled';
@@ -364,19 +410,19 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
 
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <h4 className="text-xs font-semibold text-slate-100 truncate max-w-md">{post.title}</h4>
+                        <h4 className="text-xs font-semibold text-slate-100 truncate max-w-md">
+                          {post.videoId?.cleanTitle || post.videoId?.originalName || post.title}
+                        </h4>
                         {getStatusBadge(post.status)}
-                        {post.publishingStatus && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 font-mono">
-                            Dispatch: {post.publishingStatus}
-                          </span>
-                        )}
                       </div>
 
-                      <p className="text-xs text-slate-400 line-clamp-1 mt-0.5">{post.caption || 'No caption'}</p>
+                      <p className="text-xs text-slate-300 mt-0.5">
+                        {isYt ? 'YouTube' : 'Instagram'} · {post.accountId?.accountName || group.name}
+                        {post.videoId?.folderName ? ` · Folder ${post.videoId.folderName}` : ''}
+                      </p>
 
                       <div className="flex flex-wrap items-center gap-3 mt-2 text-[11px] text-slate-400">
-                        <span className="flex items-center gap-1 font-mono">
+                        <span className="flex items-center gap-1">
                           <Clock className="w-3.5 h-3.5 text-slate-500" />
                           {new Date(post.scheduledAt).toLocaleString([], {
                             month: 'short',
@@ -384,11 +430,8 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
                             hour: '2-digit',
                             minute: '2-digit',
                           })}
-                          <span className="text-slate-500 text-[10px]">({post.timezone || 'UTC'})</span>
                         </span>
-
-                        <span>Account: {post.accountId?.accountName || 'Unknown'}</span>
-                        {post.attempts > 0 && <span>Attempts: {post.attempts}/{post.maxAttempts || 3}</span>}
+                        {post.attempts > 0 && <span>Try {post.attempts} of {post.maxAttempts || 3}</span>}
 
                         {post.nextRetryAt && (
                           <span className="text-amber-400 font-mono text-[10px]">
@@ -429,7 +472,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
                       onClick={() => setActiveLogPost(post)}
                       className="text-xs text-slate-400 hover:text-slate-200 py-1"
                     >
-                      Audit
+                      Details
                     </Button>
 
                     {/* Edit Metadata */}
@@ -543,6 +586,26 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
                 </div>
               );
             })}
+              </section>
+            ))}
+            {accountGroups.some((group) => group.name === 'No channel linked') && (
+              <section className="space-y-3">
+                <button
+                  type="button"
+                  onClick={() => setShowUnlinked((open) => !open)}
+                  className="text-xs text-slate-400 hover:text-slate-200"
+                >
+                  {showUnlinked ? 'Hide' : 'Show'} {accountGroups.find((group) => group.name === 'No channel linked')?.posts.length || 0} old posts with no channel
+                </button>
+                {showUnlinked && accountGroups.find((group) => group.name === 'No channel linked')?.posts.map((post) => (
+                  <div key={post._id} className="p-3 rounded-lg border border-slate-800 text-xs text-slate-400">
+                    <span className="text-slate-200">{post.videoId?.originalName || post.title}</span>
+                    <span className="ml-2 capitalize">{post.platform}</span>
+                    <span className="ml-2">{post.status}</span>
+                  </div>
+                ))}
+              </section>
+            )}
           </div>
         )}
       </Card>

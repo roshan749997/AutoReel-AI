@@ -53,6 +53,7 @@ import { Badge } from '../common/Badge.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
 import { Modal } from '../common/Modal.jsx';
 import { api } from '../../api/client.js';
+import { FolderTree, videoFolderLabel } from './FolderTree.jsx';
 
 export function extractDriveFolderId(input) {
   if (!input || typeof input !== 'string') return '';
@@ -143,12 +144,18 @@ export const VideoLibraryModule = ({
   const [aspectFilter, setAspectFilter] = useState('');
   const [sizeFilter, setSizeFilter] = useState('');
   const [approvalFilter, setApprovalFilter] = useState('');
-  const [selectedFolder, setSelectedFolder] = useState('');
+  const [selectedFolder, setSelectedFolder] = useState(() => {
+    if (typeof sessionStorage === 'undefined') return '';
+    const focus = sessionStorage.getItem('library-folder-focus') || '';
+    if (focus) sessionStorage.removeItem('library-folder-focus');
+    return focus;
+  });
   const [sortOption, setSortOption] = useState('modified_desc');
 
   // Google Drive Accounts & Folders state
   const [selectedDriveAccount, setSelectedDriveAccount] = useState('all');
   const [foldersList, setFoldersList] = useState([]);
+  const [folderTree, setFolderTree] = useState([]);
   const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
   const [isRemovingDriveId, setIsRemovingDriveId] = useState(null);
 
@@ -251,12 +258,13 @@ export const VideoLibraryModule = ({
       const accId = targetAccountId !== null ? targetAccountId : selectedDriveAccount;
       const accountFilter = accId && accId !== 'all' ? { accountId: accId } : {};
 
-      const [driveRes, progressRes, aiRes, bulkRes, foldersRes, statsRes] = await Promise.all([
+      const [driveRes, progressRes, aiRes, bulkRes, foldersRes, treeRes, statsRes] = await Promise.all([
         api.getDriveStatus().catch(() => ({ data: { connected: false } })),
         api.getSyncProgress().catch(() => ({ data: null })),
         api.getAiStatus().catch(() => ({ data: null })),
         api.getBulkAiProgress().catch(() => ({ data: null })),
         api.getVideoFoldersSummary(accountFilter).catch(() => ({ data: [] })),
+        api.getVideoFolderTree().catch(() => ({ data: [] })),
         api.getVideoStats(accountFilter).catch(() => ({ data: null })),
       ]);
 
@@ -270,6 +278,9 @@ export const VideoLibraryModule = ({
       if (foldersRes.data && Array.isArray(foldersRes.data)) {
         setFoldersList(foldersRes.data);
       }
+      if (treeRes?.data && Array.isArray(treeRes.data)) {
+        setFolderTree(treeRes.data);
+      }
       if (statsRes?.data) {
         setLibraryStats(statsRes.data);
       }
@@ -281,6 +292,12 @@ export const VideoLibraryModule = ({
   useEffect(() => {
     checkInitialStatus();
   }, [checkInitialStatus]);
+
+  useEffect(() => {
+    if (!selectedFolder) return undefined;
+    onFilterChange({ folderId: selectedFolder });
+    return undefined;
+  }, []);
 
   // Connect another Google Drive account handler
   const handleConnectGoogleDrive = async () => {
@@ -336,6 +353,8 @@ export const VideoLibraryModule = ({
         try {
           const res = await api.getSyncProgress();
           setSyncProgress(res.data);
+          const treeRes = await api.getVideoFolderTree().catch(() => null);
+          if (treeRes?.data && Array.isArray(treeRes.data)) setFolderTree(treeRes.data);
           if (res.data?.job?.status === 'completed' || res.data?.job?.status === 'failed') {
             if (onReload) onReload();
           }
@@ -1132,47 +1151,60 @@ export const VideoLibraryModule = ({
             </div>
           )}
 
-          {/* Folder Filter Chips (if distinct folders discovered) */}
-          {foldersList.length > 0 && (
-            <div className="pt-2 border-t border-slate-800/60 flex flex-wrap items-center gap-2 text-xs">
+          {(folderTree.length > 0 || foldersList.length > 0) && (
+            <div className="pt-2 border-t border-slate-800/60 space-y-2">
               <span className="text-[11px] text-slate-400 font-medium flex items-center gap-1">
                 <Folder className="w-3.5 h-3.5 text-indigo-400" />
-                Drive Folders:
+                Drive folders and subfolders
               </span>
-              <button
-                onClick={() => {
-                  setSelectedFolder('');
-                  handleFilterUpdate({ folderId: '' });
-                }}
-                className={`px-2.5 py-1 rounded-lg text-xs transition-colors ${
-                  !selectedFolder
-                    ? 'bg-indigo-600 text-white font-medium shadow-xs'
-                    : 'bg-slate-950 text-slate-300 border border-slate-800 hover:border-slate-700'
-                }`}
-              >
-                All Folders
-              </button>
-              {foldersList.map((f) => {
-                const isActive = selectedFolder === f._id;
-                return (
+              {folderTree.length > 0 ? (
+                <FolderTree
+                  nodes={folderTree}
+                  selectedId={selectedFolder}
+                  onSelect={(folderId) => {
+                    setSelectedFolder(folderId);
+                    handleFilterUpdate({ folderId, status: folderId ? 'all' : statusFilter });
+                  }}
+                />
+              ) : (
+                <div className="flex flex-wrap items-center gap-2 text-xs">
                   <button
-                    key={f._id}
                     onClick={() => {
-                      const next = isActive ? '' : f._id;
-                      setSelectedFolder(next);
-                      handleFilterUpdate({ folderId: next });
+                      setSelectedFolder('');
+                      handleFilterUpdate({ folderId: '' });
                     }}
-                    className={`px-2.5 py-1 rounded-lg text-xs transition-colors flex items-center gap-1.5 ${
-                      isActive
+                    className={`px-2.5 py-1 rounded-lg text-xs transition-colors ${
+                      !selectedFolder
                         ? 'bg-indigo-600 text-white font-medium shadow-xs'
                         : 'bg-slate-950 text-slate-300 border border-slate-800 hover:border-slate-700'
                     }`}
                   >
-                    <span>{f.folderName || 'Unnamed Folder'}</span>
-                    <span className="text-[10px] opacity-70">({f.count})</span>
+                    All Folders
                   </button>
-                );
-              })}
+                  {foldersList.map((f) => {
+                    const label = f.folderPathNames?.length ? f.folderPathNames.join(' / ') : f.folderName || 'Unnamed Folder';
+                    const isActive = selectedFolder === f._id;
+                    return (
+                      <button
+                        key={f._id}
+                        onClick={() => {
+                          const next = isActive ? '' : f._id;
+                          setSelectedFolder(next);
+                          handleFilterUpdate({ folderId: next });
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-xs transition-colors flex items-center gap-1.5 ${
+                          isActive
+                            ? 'bg-indigo-600 text-white font-medium shadow-xs'
+                            : 'bg-slate-950 text-slate-300 border border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        <span>{label}</span>
+                        <span className="text-[10px] opacity-70">({f.count})</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1917,10 +1949,10 @@ export const VideoLibraryModule = ({
                           {video.originalName}
                         </span>
 
-                        {video.folderName && (
+                        {videoFolderLabel(video) && (
                           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-400">
                             <Folder className="w-2.5 h-2.5 text-indigo-400" />
-                            {video.folderName}
+                            {videoFolderLabel(video)}
                           </span>
                         )}
                       </div>
@@ -3146,7 +3178,7 @@ export const VideoLibraryModule = ({
                     <div>
                       <span className="text-slate-500 block text-[10px]">Folder</span>
                       <span className="font-semibold text-slate-200 truncate block">
-                        {previewVideo.folderName || 'Root'}
+                        {videoFolderLabel(previewVideo) || 'Root'}
                       </span>
                     </div>
                   </div>

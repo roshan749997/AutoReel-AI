@@ -4,6 +4,7 @@ import { connectDatabase, closeDatabase } from './config/database.js';
 import { configureSecurity } from './middleware/security.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { schedulerService } from './services/schedulerService.js';
+import { recoverInterruptedTransfers } from './drive-transfer/worker.js';
 
 // Route imports
 import healthRoutes from './routes/healthRoutes.js';
@@ -13,6 +14,7 @@ import postRoutes from './routes/postRoutes.js';
 import aiRoutes from './routes/aiRoutes.js';
 import workflowRoutes from './routes/workflowRoutes.js';
 import logRoutes from './routes/logRoutes.js';
+import driveTransferRoutes from './routes/driveTransferRoutes.js';
 
 const app = express();
 
@@ -31,6 +33,7 @@ app.use('/api/posts', postRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/workflows', workflowRoutes);
 app.use('/api/logs', logRoutes);
+app.use('/api/drive-transfer', driveTransferRoutes);
 
 // Catch 404s
 app.use(notFoundHandler);
@@ -47,6 +50,11 @@ const startServer = async () => {
 
   // Start background post scheduler
   schedulerService.start();
+  try {
+    await recoverInterruptedTransfers();
+  } catch (err) {
+    console.error(`[DriveTransfer] Could not resume an interrupted transfer: ${err.message}`);
+  }
 
   server = app.listen(config.port, () => {
     console.log(`====================================================`);

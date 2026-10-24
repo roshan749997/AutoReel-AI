@@ -33,7 +33,7 @@ router.get('/', async (req, res, next) => {
     }
 
     const posts = await Post.find(query)
-      .populate('videoId', 'cleanTitle originalName driveFileId thumbnailUrl duration resolution aiMetadata')
+      .populate('videoId', 'cleanTitle originalName driveFileId thumbnailUrl duration resolution aiMetadata folderId folderName')
       .populate('accountId', 'accountName platform profilePictureUrl username status')
       .sort({ scheduledAt: 1 });
 
