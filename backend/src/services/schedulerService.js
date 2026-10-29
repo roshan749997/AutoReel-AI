@@ -233,6 +233,26 @@ export class SchedulerService {
         err.isDuplicate = true;
         throw err;
       }
+    } else {
+      // Overwrite/update existing scheduled post if still in queue
+      const existingPost = await Post.findOne({
+        videoId,
+        accountId,
+        status: { $in: ['scheduled', 'queued'] },
+      });
+      if (existingPost) {
+        existingPost.scheduledAt = targetDate;
+        existingPost.timezone = timezone;
+        if (title) existingPost.title = title;
+        if (caption) existingPost.caption = caption;
+        existingPost.executionLogs.push({
+          step: 'rescheduled',
+          message: `Rescheduled to ${targetDate.toISOString()} via Batch Schedule overwrite`,
+          level: 'info',
+        });
+        await existingPost.save();
+        return existingPost;
+      }
     }
 
     // 5. Deterministic Idempotency Key per video, platform, and account

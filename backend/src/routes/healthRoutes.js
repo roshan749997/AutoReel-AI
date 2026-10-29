@@ -31,6 +31,17 @@ router.get('/', (req, res) => {
   });
 });
 
+const safeCheck = async (fn, timeoutMs = 2500, fallback = {}) => {
+  try {
+    const timeoutPromise = new Promise((resolve) =>
+      setTimeout(() => resolve({ configured: false, connected: false, error: 'Check timed out', ...fallback }), timeoutMs)
+    );
+    return await Promise.race([Promise.resolve().then(fn), timeoutPromise]);
+  } catch (err) {
+    return { configured: false, connected: false, error: err.message, ...fallback };
+  }
+};
+
 // Comprehensive integration diagnostic check
 router.get('/integrations', async (req, res) => {
   const dbStatus = getDatabaseStatus();
@@ -52,17 +63,13 @@ router.get('/integrations', async (req, res) => {
     n8nStatus.error = err.message;
   }
 
-  // Test AI Provider
-  const aiStatus = await aiService.testConnection();
-
-  // Test Google Drive
-  const driveStatus = await googleDriveService.testConnection();
-
-  // Test YouTube
-  const ytStatus = await youtubeService.testConnection();
-
-  // Test Instagram
-  const igStatus = await instagramService.testConnection();
+  // Run all service checks concurrently with strict 2.5s timeout
+  const [aiStatus, driveStatus, ytStatus, igStatus] = await Promise.all([
+    safeCheck(() => aiService.testConnection(), 2500),
+    safeCheck(() => googleDriveService.testConnection(), 2500),
+    safeCheck(() => youtubeService.testConnection(), 2500),
+    safeCheck(() => instagramService.testConnection(), 2500),
+  ]);
 
   res.json({
     timestamp: new Date().toISOString(),
@@ -104,9 +111,18 @@ router.get('/setup-checklist', async (req, res) => {
 
   if (dbStatus.connected) {
     try {
-      accountsCount = await Account.countDocuments({ status: 'connected' });
-      videosCount = await Video.countDocuments();
-      postsCount = await Post.countDocuments();
+      const counts = await safeCheck(
+        () => Promise.all([
+          Account.countDocuments({ status: 'connected' }),
+          Video.countDocuments(),
+          Post.countDocuments(),
+        ]),
+        2500,
+        [0, 0, 0]
+      );
+      if (Array.isArray(counts)) {
+        [accountsCount, videosCount, postsCount] = counts;
+      }
     } catch {
       // Ignore if collection not ready
     }

@@ -15,7 +15,7 @@ import { api } from '../../api/client.js';
 
 const PAIR_STORAGE_KEY = 'channel-board-pairs';
 
-const readPairs = () => {
+const readLocalPairs = () => {
   try {
     const raw = localStorage.getItem(PAIR_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
@@ -23,6 +23,14 @@ const readPairs = () => {
   } catch {
     return {};
   }
+};
+
+const toPairMap = (rows = []) => {
+  const map = {};
+  rows.forEach((row) => {
+    if (row?.folderId) map[row.folderId] = row;
+  });
+  return map;
 };
 
 const normalizeName = (value) => (value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -45,10 +53,10 @@ const accountIdOf = (post) => String(post.accountId?._id || post.accountId || ''
 const videoOf = (post) => (post.videoId && typeof post.videoId === 'object' ? post.videoId : null);
 
 const statusTone = (status) => {
-  if (status === 'published') return 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20';
-  if (status === 'failed') return 'text-rose-300 bg-rose-500/10 border-rose-500/20';
-  if (status === 'paused' || status === 'cancelled') return 'text-slate-300 bg-slate-800 border-slate-700';
-  return 'text-amber-200 bg-amber-500/10 border-amber-500/20';
+  if (status === 'published') return 'text-emerald-700 bg-emerald-500/10 border-emerald-500/20';
+  if (status === 'failed') return 'text-rose-700 bg-rose-500/10 border-rose-500/20';
+  if (status === 'paused' || status === 'cancelled') return 'text-slate-700 bg-slate-100 border-slate-300';
+  return 'text-amber-800 bg-amber-500/10 border-amber-500/20';
 };
 
 const formatWhen = (value) => {
@@ -70,7 +78,7 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
   const [folders, setFolders] = useState([]);
   const [isLoadingFolders, setIsLoadingFolders] = useState(true);
   const [folderError, setFolderError] = useState('');
-  const [pairs, setPairs] = useState(readPairs);
+  const [pairs, setPairs] = useState({});
   const [selectedFolderId, setSelectedFolderId] = useState('');
   const [videos, setVideos] = useState([]);
   const [videoPage, setVideoPage] = useState(1);
@@ -86,9 +94,49 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
       setIsLoadingFolders(true);
       setFolderError('');
       try {
-        const res = await api.getVideoFoldersSummary();
+        const [treeRes, pairRes] = await Promise.all([
+          api.getVideoFolderTree().catch(() => ({ data: [] })),
+          api.getChannelPairs().catch(() => ({ data: [] })),
+        ]);
         if (cancelled) return;
-        const list = Array.isArray(res.data) ? res.data : [];
+
+        const tree = Array.isArray(treeRes.data) ? treeRes.data : [];
+        let list = tree.map((node) => ({
+          _id: node.id,
+          folderName: node.name,
+          count: node.total ?? node.count ?? 0,
+        }));
+
+        let pairMap = toPairMap(pairRes.data);
+        const localPairs = readLocalPairs();
+        const localEntries = Object.entries(localPairs);
+        if (localEntries.length > 0) {
+          await Promise.all(localEntries.map(([folderId, saved]) => {
+            if (pairMap[folderId]) return Promise.resolve();
+            return api.saveChannelPair({
+              folderId,
+              folderName: saved.folderName || list.find((folder) => folder._id === folderId)?.folderName || '',
+              youtubeAccountId: saved.youtubeAccountId || '',
+              instagramAccountId: saved.instagramAccountId || '',
+            }).catch(() => null);
+          }));
+          const refreshed = await api.getChannelPairs().catch(() => ({ data: [] }));
+          pairMap = toPairMap(refreshed.data);
+          localStorage.removeItem(PAIR_STORAGE_KEY);
+        }
+
+        const knownIds = new Set(list.map((folder) => folder._id));
+        Object.values(pairMap).forEach((pair) => {
+          if (pair.folderId && !knownIds.has(pair.folderId)) {
+            list.push({
+              _id: pair.folderId,
+              folderName: pair.folderName || 'Linked folder',
+              count: 0,
+            });
+          }
+        });
+
+        setPairs(pairMap);
         setFolders(list);
         setSelectedFolderId((current) => current || list[0]?._id || '');
       } catch (err) {
@@ -140,13 +188,20 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
   }, [selectedFolderId, videoPage]);
 
   const savePair = (folderId, patch) => {
-    setPairs((current) => {
-      const next = {
-        ...current,
-        [folderId]: { ...(current[folderId] || {}), ...patch },
-      };
-      localStorage.setItem(PAIR_STORAGE_KEY, JSON.stringify(next));
-      return next;
+    const folder = folders.find((item) => item._id === folderId);
+    const nextPair = {
+      folderId,
+      folderName: folder?.folderName || pairs[folderId]?.folderName || '',
+      youtubeAccountId: pairs[folderId]?.youtubeAccountId || '',
+      instagramAccountId: pairs[folderId]?.instagramAccountId || '',
+      ...patch,
+    };
+    setPairs((current) => ({
+      ...current,
+      [folderId]: { ...(current[folderId] || {}), ...nextPair },
+    }));
+    api.saveChannelPair(nextPair).catch((err) => {
+      setFolderError(err.message || 'Could not save this channel link');
     });
   };
 
@@ -156,7 +211,13 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
 
   const folderPosts = useMemo(() => {
     if (!selectedFolder) return [];
-    return posts.filter((post) => videoOf(post)?.folderId && String(videoOf(post).folderId) === String(selectedFolder._id));
+    const folderId = String(selectedFolder._id);
+    return posts.filter((post) => {
+      const video = videoOf(post);
+      if (!video) return false;
+      if (String(video.folderId) === folderId) return true;
+      return Array.isArray(video.folderPathIds) && video.folderPathIds.map(String).includes(folderId);
+    });
   }, [posts, selectedFolder]);
 
   const postsForAccount = (accountId) => {
@@ -174,8 +235,11 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
     if (!selectedFolder || linked.length === 0) return 0;
     return posts.filter((post) => {
       if (!linked.includes(accountIdOf(post))) return false;
-      const folderId = videoOf(post)?.folderId;
-      return folderId && String(folderId) !== String(selectedFolder._id);
+      const video = videoOf(post);
+      const folderId = video?.folderId;
+      const inFolder = String(folderId) === String(selectedFolder._id)
+        || (Array.isArray(video?.folderPathIds) && video.folderPathIds.map(String).includes(String(selectedFolder._id)));
+      return !inFolder;
     }).length;
   }, [posts, pair.youtubeAccountId, pair.instagramAccountId, selectedFolder]);
 
@@ -207,9 +271,9 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
         {items.map((post) => {
           const video = videoOf(post);
           return (
-            <div key={post._id} className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2">
+            <div key={post._id} className="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2">
               <div className="flex items-start justify-between gap-2">
-                <p className="text-xs font-medium text-slate-100 truncate">
+                <p className="text-xs font-medium text-slate-900 truncate">
                   {video?.cleanTitle || video?.originalName || post.title}
                 </p>
                 <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border capitalize ${statusTone(post.status)}`}>
@@ -232,10 +296,10 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
       <Card>
         <CardHeader
           title="One folder, one YouTube, one Instagram"
-          subtitle="Name each Drive folder after the channel. This board keeps that pair separate so you can see which video is going where."
+          subtitle="Each Drive folder is one channel. Link it here, then Video Library and Publishing Queue show that channel by itself."
         />
         <p className="text-xs text-slate-400">
-          Scheduling still happens in Video Library. Pick only this pair’s YouTube and Instagram when you queue a video from that folder.
+          Use a different folder for each of the 10+ accounts. Videos from that folder upload only to the YouTube and Instagram you pick below.
         </p>
       </Card>
 
@@ -245,7 +309,7 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
         </Card>
       ) : folderError ? (
         <Card>
-          <p className="text-xs text-rose-300">{folderError}</p>
+          <p className="text-xs text-rose-700">{folderError}</p>
         </Card>
       ) : folders.length === 0 ? (
         <Card>
@@ -280,11 +344,11 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
                     className={`w-full text-left rounded-lg px-3 py-2.5 border transition-colors ${
                       active
                         ? 'bg-indigo-600/15 border-indigo-500/30'
-                        : 'bg-slate-950/40 border-slate-800 hover:border-slate-700'
+                        : 'bg-slate-50/40 border-slate-200 hover:border-slate-300'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-semibold text-slate-100 truncate">{folder.folderName || 'Unnamed folder'}</span>
+                      <span className="text-xs font-semibold text-slate-900 truncate">{folder.folderName || 'Unnamed folder'}</span>
                       <span className="text-[10px] text-slate-500 shrink-0">{folder.count}</span>
                     </div>
                     <p className="text-[10px] text-slate-500 mt-1 truncate">
@@ -303,9 +367,9 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
                   <div>
                     <div className="flex items-center gap-2">
                       <Folder className="w-4 h-4 text-indigo-400" />
-                      <h3 className="text-sm font-semibold text-slate-100">{selectedFolder.folderName}</h3>
+                      <h3 className="text-sm font-semibold text-slate-900">{selectedFolder.folderName}</h3>
                     </div>
-                    <p className="text-xs text-slate-400 mt-1">{selectedFolder.count} videos in this Drive folder</p>
+                    <p className="text-xs text-slate-400 mt-1">{selectedFolder.count} videos in this Drive folder and its subfolders</p>
                   </div>
                   <Button variant="secondary" size="sm" onClick={openInLibrary} className="text-xs">
                     Open this folder in library
@@ -320,7 +384,7 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
                     <select
                       value={pair.youtubeAccountId || ''}
                       onChange={(event) => savePair(selectedFolder._id, { youtubeAccountId: event.target.value })}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500/60"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs text-slate-800 focus:outline-none focus:border-indigo-500/60"
                     >
                       <option value="">Select YouTube</option>
                       {youtubeAccounts.map((account) => (
@@ -333,7 +397,7 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
                       <button
                         type="button"
                         onClick={() => savePair(selectedFolder._id, { youtubeAccountId: suggestedYoutube })}
-                        className="text-[11px] text-indigo-300 hover:text-indigo-200"
+                        className="text-[11px] text-indigo-700 hover:text-indigo-800"
                       >
                         Use suggested: {youtubeAccounts.find((account) => account._id === suggestedYoutube)?.accountName}
                       </button>
@@ -347,7 +411,7 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
                     <select
                       value={pair.instagramAccountId || ''}
                       onChange={(event) => savePair(selectedFolder._id, { instagramAccountId: event.target.value })}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500/60"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs text-slate-800 focus:outline-none focus:border-indigo-500/60"
                     >
                       <option value="">Select Instagram</option>
                       {instagramAccounts.map((account) => (
@@ -361,7 +425,7 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
                       <button
                         type="button"
                         onClick={() => savePair(selectedFolder._id, { instagramAccountId: suggestedInstagram })}
-                        className="text-[11px] text-indigo-300 hover:text-indigo-200"
+                        className="text-[11px] text-indigo-700 hover:text-indigo-800"
                       >
                         Use suggested: {instagramAccounts.find((account) => account._id === suggestedInstagram)?.accountName}
                       </button>
@@ -370,7 +434,7 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
                 </div>
 
                 {mismatchedCount > 0 && (
-                  <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+                  <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-800">
                     <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                     <span>
                       {mismatchedCount} post{mismatchedCount === 1 ? '' : 's'} for this pair use a video from a different folder.
@@ -407,7 +471,7 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
                           type="button"
                           disabled={videoPage <= 1}
                           onClick={() => setVideoPage((page) => Math.max(1, page - 1))}
-                          className="px-2 py-1 rounded border border-slate-800 disabled:opacity-40"
+                          className="px-2 py-1 rounded border border-slate-200 disabled:opacity-40"
                         >
                           Prev
                         </button>
@@ -416,7 +480,7 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
                           type="button"
                           disabled={videoPage * 20 >= videoTotal}
                           onClick={() => setVideoPage((page) => page + 1)}
-                          className="px-2 py-1 rounded border border-slate-800 disabled:opacity-40"
+                          className="px-2 py-1 rounded border border-slate-200 disabled:opacity-40"
                         >
                           Next
                         </button>
@@ -446,20 +510,20 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
                       return (
                         <div
                           key={video._id}
-                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2"
+                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50/40 px-3 py-2"
                         >
                           <div className="min-w-0 flex items-center gap-2">
                             <Film className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                             <div className="min-w-0">
-                              <p className="text-xs font-medium text-slate-100 truncate">{video.cleanTitle || video.originalName}</p>
+                              <p className="text-xs font-medium text-slate-900 truncate">{video.cleanTitle || video.originalName}</p>
                               <p className="text-[10px] text-slate-500 truncate">{video.originalName}</p>
                             </div>
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${yt ? statusTone(yt.status) : 'text-slate-500 border-slate-800'}`}>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${yt ? statusTone(yt.status) : 'text-slate-500 border-slate-200'}`}>
                               YT {yt ? yt.status : 'not scheduled'}
                             </span>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${ig ? statusTone(ig.status) : 'text-slate-500 border-slate-800'}`}>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${ig ? statusTone(ig.status) : 'text-slate-500 border-slate-200'}`}>
                               IG {ig ? ig.status : 'not scheduled'}
                             </span>
                           </div>
@@ -478,7 +542,7 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
         <Card>
           <p className="text-[11px] text-slate-400">
             Not linked to a folder yet:{' '}
-            <span className="text-slate-200">
+            <span className="text-slate-800">
               {unassignedAccounts.map((account) => `${account.accountName} (${account.platform})`).join(', ')}
             </span>
           </p>

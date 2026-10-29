@@ -1,12 +1,12 @@
 import React from 'react';
 
 const variants = {
-  success: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
-  warning: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-  error: 'bg-rose-500/10 text-rose-400 border-rose-500/20',
-  info: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20',
-  neutral: 'bg-slate-800 text-slate-300 border-slate-700',
-  purple: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
+  success: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  warning: 'bg-amber-50 text-amber-700 border-amber-200',
+  error: 'bg-rose-50 text-rose-700 border-rose-200',
+  info: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+  neutral: 'bg-slate-100 text-slate-700 border-slate-200',
+  purple: 'bg-purple-50 text-purple-700 border-purple-200',
 };
 
 const dotVariants = {

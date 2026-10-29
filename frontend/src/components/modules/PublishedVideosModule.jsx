@@ -21,6 +21,7 @@ import { Button } from '../common/Button.jsx';
 import { Badge } from '../common/Badge.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
 import { Modal } from '../common/Modal.jsx';
+import { ChannelAvatar } from '../common/ChannelAvatar.jsx';
 
 export const PublishedVideosModule = ({
   posts = [],
@@ -98,7 +99,7 @@ export const PublishedVideosModule = ({
       {/* 1. Header Banner & Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-100 tracking-tight flex items-center gap-2">
+          <h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
             <CheckCircle2 className="w-5 h-5 text-emerald-400" />
             Published Content Hub
           </h2>
@@ -114,7 +115,7 @@ export const PublishedVideosModule = ({
               size="sm"
               icon={RefreshCw}
               onClick={onReload}
-              className="text-slate-300 hover:text-white"
+              className="text-slate-700 hover:text-slate-900"
             >
               Refresh
             </Button>
@@ -135,44 +136,44 @@ export const PublishedVideosModule = ({
 
       {/* 2. Top Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800/80 flex items-center justify-between">
+        <div className="p-4 rounded-xl bg-white/60 border border-slate-200/80 flex items-center justify-between">
           <div>
             <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
               Total Live Posts
             </span>
-            <span className="text-2xl font-bold text-slate-100 mt-1 block">
+            <span className="text-2xl font-bold text-slate-900 mt-1 block">
               {stats.total.toLocaleString()}
             </span>
           </div>
-          <div className="w-10 h-10 rounded-lg bg-emerald-950/60 border border-emerald-800/40 flex items-center justify-center text-emerald-400 shadow-sm">
+          <div className="w-10 h-10 rounded-lg bg-emerald-50/60 border border-emerald-200/40 flex items-center justify-center text-emerald-400 shadow-sm">
             <CheckCircle2 className="w-5 h-5" />
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800/80 flex items-center justify-between">
+        <div className="p-4 rounded-xl bg-white/60 border border-slate-200/80 flex items-center justify-between">
           <div>
             <span className="text-[11px] font-semibold text-rose-400 uppercase tracking-wider block">
               YouTube Shorts Live
             </span>
-            <span className="text-2xl font-bold text-slate-100 mt-1 block">
+            <span className="text-2xl font-bold text-slate-900 mt-1 block">
               {stats.ytCount.toLocaleString()}
             </span>
           </div>
-          <div className="w-10 h-10 rounded-lg bg-rose-950/60 border border-rose-800/40 flex items-center justify-center text-rose-400 shadow-sm">
+          <div className="w-10 h-10 rounded-lg bg-rose-50/60 border border-rose-200/40 flex items-center justify-center text-rose-400 shadow-sm">
             <Youtube className="w-5 h-5" />
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800/80 flex items-center justify-between">
+        <div className="p-4 rounded-xl bg-white/60 border border-slate-200/80 flex items-center justify-between">
           <div>
             <span className="text-[11px] font-semibold text-pink-400 uppercase tracking-wider block">
               Instagram Reels Live
             </span>
-            <span className="text-2xl font-bold text-slate-100 mt-1 block">
+            <span className="text-2xl font-bold text-slate-900 mt-1 block">
               {stats.igCount.toLocaleString()}
             </span>
           </div>
-          <div className="w-10 h-10 rounded-lg bg-pink-950/60 border border-pink-800/40 flex items-center justify-center text-pink-400 shadow-sm">
+          <div className="w-10 h-10 rounded-lg bg-pink-50/60 border border-pink-200/40 flex items-center justify-center text-pink-400 shadow-sm">
             <Instagram className="w-5 h-5" />
           </div>
         </div>
@@ -189,19 +190,19 @@ export const PublishedVideosModule = ({
               placeholder="Search published titles, original filenames, or channels..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500/60"
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-800 placeholder-slate-500 focus:outline-none focus:border-indigo-500/60"
             />
           </div>
 
           {/* Platform Filter Buttons */}
-          <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800 self-start sm:self-auto">
+          <div className="flex items-center gap-1.5 bg-slate-50 p-1 rounded-lg border border-slate-200 self-start sm:self-auto">
             <button
               type="button"
               onClick={() => setPlatformFilter('all')}
               className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
                 platformFilter === 'all'
                   ? 'bg-indigo-600 text-white'
-                  : 'text-slate-400 hover:text-slate-200'
+                  : 'text-slate-400 hover:text-slate-800'
               }`}
             >
               All Platforms
@@ -237,7 +238,7 @@ export const PublishedVideosModule = ({
             <select
               value={accountFilter}
               onChange={(e) => setAccountFilter(e.target.value)}
-              className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-300 focus:outline-none focus:border-indigo-500/60"
+              className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs text-slate-700 focus:outline-none focus:border-indigo-500/60"
             >
               <option value="all">All Channels & Accounts</option>
               {accounts.map((acc) => (
@@ -288,11 +289,11 @@ export const PublishedVideosModule = ({
             return (
               <Card
                 key={post._id}
-                className="overflow-hidden flex flex-col justify-between hover:border-slate-700 transition-all border border-slate-800/80 bg-slate-900/60 shadow-xs"
+                className="overflow-hidden flex flex-col justify-between hover:border-slate-300 transition-all border border-slate-200/80 bg-white/60 shadow-xs"
               >
                 <div>
                   {/* Top Thumbnail Preview */}
-                  <div className="relative aspect-video bg-slate-950 overflow-hidden group">
+                  <div className="relative aspect-video bg-slate-50 overflow-hidden group">
                     {video.thumbnailUrl ? (
                       <img
                         src={video.thumbnailUrl}
@@ -301,14 +302,14 @@ export const PublishedVideosModule = ({
                         loading="lazy"
                       />
                     ) : (
-                      <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 text-slate-600">
+                      <div className="w-full h-full flex flex-col items-center justify-center bg-slate-50 text-slate-600">
                         <Film className="w-8 h-8 mb-1" />
                         <span className="text-[10px]">No Thumbnail</span>
                       </div>
                     )}
 
                     {/* Gradient Overlay */}
-                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/20 to-transparent" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-slate-50/90 via-slate-50/20 to-transparent" />
 
                     {/* Platform Badge (Top Left) */}
                     <div className="absolute top-2 left-2 flex items-center gap-1.5">
@@ -325,7 +326,7 @@ export const PublishedVideosModule = ({
                       )}
 
                       {video.resolution?.isVertical && (
-                        <span className="bg-slate-900/80 backdrop-blur-xs text-slate-300 text-[9px] font-bold px-1.5 py-0.5 rounded border border-slate-700/50">
+                        <span className="bg-white/80 backdrop-blur-xs text-slate-700 text-[9px] font-bold px-1.5 py-0.5 rounded border border-slate-300/50">
                           9:16
                         </span>
                       )}
@@ -333,13 +334,13 @@ export const PublishedVideosModule = ({
 
                     {/* Duration Badge (Bottom Right) */}
                     {video.duration > 0 && (
-                      <span className="absolute bottom-2 right-2 bg-black/80 backdrop-blur-xs text-white text-[9px] font-mono px-1.5 py-0.5 rounded">
+                      <span className="absolute bottom-2 right-2 bg-slate-900/80 backdrop-blur-xs text-white text-[9px] font-mono px-1.5 py-0.5 rounded">
                         {formatDuration(video.duration)}
                       </span>
                     )}
 
                     {/* Published Date (Bottom Left) */}
-                    <span className="absolute bottom-2 left-2 text-[10px] text-slate-300 flex items-center gap-1 drop-shadow-md">
+                    <span className="absolute bottom-2 left-2 text-[10px] text-slate-700 flex items-center gap-1 drop-shadow-md">
                       <Clock className="w-3 h-3 text-emerald-400" />
                       {formatPublishDate(post.publishedAt || post.updatedAt)}
                     </span>
@@ -348,23 +349,17 @@ export const PublishedVideosModule = ({
                   {/* Body Content */}
                   <div className="p-4 space-y-3">
                     {/* Title */}
-                    <h3 className="font-semibold text-slate-100 text-sm line-clamp-2 leading-snug">
+                    <h3 className="font-semibold text-slate-900 text-sm line-clamp-2 leading-snug">
                       {post.title}
                     </h3>
 
                     {/* Account Info Pill */}
-                    <div className="flex items-center gap-2 text-xs text-slate-300 bg-slate-950/60 p-2 rounded-lg border border-slate-800/60">
-                      {account.profilePictureUrl ? (
-                        <img
-                          src={account.profilePictureUrl}
-                          alt={account.accountName}
-                          className="w-5 h-5 rounded-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-5 h-5 rounded-full bg-indigo-600/20 text-indigo-400 flex items-center justify-center text-[10px] font-bold">
-                          {(account.accountName || 'A').charAt(0).toUpperCase()}
-                        </div>
-                      )}
+                    <div className="flex items-center gap-2 text-xs text-slate-700 bg-slate-50/60 p-2 rounded-lg border border-slate-200/60">
+                      <ChannelAvatar
+                        account={account}
+                        size="xs"
+                        showBadge={false}
+                      />
                       <span className="font-medium truncate flex-1">
                         {account.accountName || account.username || 'Connected Channel'}
                       </span>
@@ -396,7 +391,7 @@ export const PublishedVideosModule = ({
                 </div>
 
                 {/* Bottom Actions */}
-                <div className="p-4 pt-0 border-t border-slate-800/60 mt-2 flex items-center gap-2">
+                <div className="p-4 pt-0 border-t border-slate-200/60 mt-2 flex items-center gap-2">
                   {liveUrl ? (
                     <a
                       href={liveUrl}
@@ -411,7 +406,7 @@ export const PublishedVideosModule = ({
                     <button
                       type="button"
                       disabled
-                      className="flex-1 bg-slate-800 text-slate-500 text-xs px-3 py-2 rounded-lg cursor-not-allowed"
+                      className="flex-1 bg-slate-100 text-slate-500 text-xs px-3 py-2 rounded-lg cursor-not-allowed"
                     >
                       Live URL Pending
                     </button>
@@ -420,7 +415,7 @@ export const PublishedVideosModule = ({
                   <button
                     type="button"
                     onClick={() => setSelectedPostDetails(post)}
-                    className="p-2 text-slate-400 hover:text-slate-200 bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-lg text-xs transition-colors"
+                    className="p-2 text-slate-400 hover:text-slate-800 bg-slate-50 border border-slate-200 hover:border-slate-300 rounded-lg text-xs transition-colors"
                     title="View Execution Details & Audit"
                   >
                     <Info className="w-4 h-4" />
@@ -446,7 +441,7 @@ export const PublishedVideosModule = ({
                 href={selectedPostDetails.publishDetails.externalUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="w-full flex items-center justify-between p-3 rounded-lg bg-indigo-600/20 border border-indigo-500/40 text-indigo-300 hover:bg-indigo-600/30 transition-colors"
+                className="w-full flex items-center justify-between p-3 rounded-lg bg-indigo-600/20 border border-indigo-500/40 text-indigo-700 hover:bg-indigo-600/30 transition-colors"
               >
                 <div className="flex items-center gap-2 font-semibold">
                   <ExternalLink className="w-4 h-4" />
@@ -457,32 +452,32 @@ export const PublishedVideosModule = ({
             )}
 
             {/* Title & Metadata */}
-            <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-2">
+            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
               <div>
                 <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Video Title</span>
-                <span className="font-semibold text-slate-100 text-sm">{selectedPostDetails.title}</span>
+                <span className="font-semibold text-slate-900 text-sm">{selectedPostDetails.title}</span>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-900 text-[11px]">
+              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200 text-[11px]">
                 <div>
                   <span className="text-slate-500 block">Platform:</span>
-                  <span className="font-medium text-slate-200 capitalize">{selectedPostDetails.platform}</span>
+                  <span className="font-medium text-slate-800 capitalize">{selectedPostDetails.platform}</span>
                 </div>
                 <div>
                   <span className="text-slate-500 block">Published At:</span>
-                  <span className="font-medium text-slate-200">
+                  <span className="font-medium text-slate-800">
                     {formatPublishDate(selectedPostDetails.publishedAt)}
                   </span>
                 </div>
                 <div>
                   <span className="text-slate-500 block">Platform ID:</span>
-                  <span className="font-mono text-slate-300 text-[10px]">
+                  <span className="font-mono text-slate-700 text-[10px]">
                     {selectedPostDetails.publishDetails?.externalPostId || '—'}
                   </span>
                 </div>
                 <div>
                   <span className="text-slate-500 block">Channel / Account:</span>
-                  <span className="font-medium text-slate-200">
+                  <span className="font-medium text-slate-800">
                     {selectedPostDetails.accountId?.accountName || selectedPostDetails.accountId?.username || '—'}
                   </span>
                 </div>
@@ -495,7 +490,7 @@ export const PublishedVideosModule = ({
                 <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider block">
                   Caption & Description
                 </span>
-                <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-slate-300 text-xs whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto">
+                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-700 text-xs whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto">
                   {selectedPostDetails.caption}
                 </div>
               </div>
@@ -506,13 +501,13 @@ export const PublishedVideosModule = ({
               <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider block">
                 Execution Audit Trail
               </span>
-              <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-2">
+              <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
                 {selectedPostDetails.executionLogs && selectedPostDetails.executionLogs.length > 0 ? (
                   selectedPostDetails.executionLogs.map((log, idx) => (
-                    <div key={idx} className="flex items-start gap-2 text-[11px] pb-1.5 border-b border-slate-900 last:border-0 last:pb-0">
+                    <div key={idx} className="flex items-start gap-2 text-[11px] pb-1.5 border-b border-slate-200 last:border-0 last:pb-0">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0 mt-1.5" />
                       <div className="flex-1">
-                        <span className="text-slate-200 block font-medium">{log.message}</span>
+                        <span className="text-slate-800 block font-medium">{log.message}</span>
                         {log.timestamp && (
                           <span className="text-[9px] text-slate-500 font-mono">
                             {new Date(log.timestamp).toLocaleTimeString()}

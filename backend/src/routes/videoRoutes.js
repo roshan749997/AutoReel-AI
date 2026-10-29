@@ -114,7 +114,8 @@ router.post('/sync/cancel', requireAdminAuth, async (req, res, next) => {
 });
 
 /**
- * Helper to query active connected Google Drive accounts and construct the drive filter
+ * The video catalog is the indexed Drive library. It stays visible without a
+ * connected YouTube channel. A specific accountId still narrows the list.
  */
 async function getConnectedDriveQuery(accountId = null) {
   const connectedAccounts = await Account.find({
@@ -123,26 +124,132 @@ async function getConnectedDriveQuery(accountId = null) {
     isDemo: { $ne: true },
   });
 
-  if (connectedAccounts.length === 0) {
-    return { hasConnected: false, connectedAccounts: [] };
-  }
-
-  const connectedIds = connectedAccounts.map((a) => a._id);
-  const connectedEmails = connectedAccounts.map((a) => a.googleEmail).filter(Boolean);
-
-  let accountFilter;
   if (accountId && accountId !== 'all') {
-    accountFilter = { accountId };
-  } else {
-    accountFilter = {
-      $or: [
-        { accountId: { $in: connectedIds } },
-        ...(connectedEmails.length > 0 ? [{ googleEmail: { $in: connectedEmails } }] : []),
-      ],
+    return {
+      hasConnected: true,
+      connectedAccounts,
+      accountFilter: { accountId },
     };
   }
 
-  return { hasConnected: true, connectedAccounts, accountFilter };
+  return { hasConnected: true, connectedAccounts, accountFilter: {} };
+}
+
+function catalogFilters(req, driveInfo, activeQueuedPostVideoIds) {
+  const andConditions = [{ isArchived: false }, driveInfo.accountFilter];
+
+  if (req.query.status) {
+    if (req.query.status === 'all') {
+      // Include queued and published videos.
+    } else if (req.query.status === 'queued') {
+      andConditions.push({
+        $or: [
+          { status: 'queued' },
+          ...(activeQueuedPostVideoIds.length > 0 ? [{ _id: { $in: activeQueuedPostVideoIds } }] : []),
+        ],
+      });
+    } else if (req.query.status === 'published') {
+      andConditions.push({ status: 'published' });
+    } else {
+      andConditions.push({ status: req.query.status });
+      andConditions.push({ status: { $nin: ['queued', 'published'] } });
+      if (activeQueuedPostVideoIds.length > 0) {
+        andConditions.push({ _id: { $nin: activeQueuedPostVideoIds } });
+      }
+    }
+  } else {
+    andConditions.push({ status: { $nin: ['queued', 'published'] } });
+    if (activeQueuedPostVideoIds.length > 0) {
+      andConditions.push({ _id: { $nin: activeQueuedPostVideoIds } });
+    }
+  }
+
+  if (req.query.indexingStatus) {
+    andConditions.push({ indexingStatus: req.query.indexingStatus });
+  }
+
+  if (req.query.isVertical !== undefined && req.query.isVertical !== '') {
+    andConditions.push({ 'resolution.isVertical': req.query.isVertical === 'true' });
+  }
+
+  if (req.query.approvalStatus) {
+    if (req.query.approvalStatus === 'approved') {
+      andConditions.push({ 'aiMetadata.approvalStatus': 'approved' });
+    } else if (req.query.approvalStatus === 'draft') {
+      andConditions.push({
+        'aiMetadata.approvalStatus': 'draft',
+        'aiMetadata.generatedTitle': { $exists: true, $ne: '' },
+      });
+    } else if (req.query.approvalStatus === 'none') {
+      andConditions.push({
+        $or: [
+          { 'aiMetadata.generatedTitle': { $exists: false } },
+          { 'aiMetadata.generatedTitle': '' },
+          { 'aiMetadata.generatedTitle': null },
+        ],
+      });
+    }
+  }
+
+  if (req.query.minSize || req.query.maxSize) {
+    const sizeCond = {};
+    if (req.query.minSize) sizeCond.$gte = parseInt(req.query.minSize, 10);
+    if (req.query.maxSize) sizeCond.$lte = parseInt(req.query.maxSize, 10);
+    andConditions.push({ fileSize: sizeCond });
+  }
+
+  if (req.query.folderId) {
+    andConditions.push({
+      $or: [{ folderId: req.query.folderId }, { folderPathIds: req.query.folderId }],
+    });
+  }
+
+  if (req.query.search && req.query.search.trim()) {
+    const searchRegex = new RegExp(req.query.search.trim(), 'i');
+    andConditions.push({
+      $or: [{ originalName: searchRegex }, { cleanTitle: searchRegex }, { notes: searchRegex }],
+    });
+  }
+
+  const query = andConditions.length > 1 ? { $and: andConditions } : andConditions[0];
+
+  let sortOptions = { driveModifiedAt: -1 };
+  switch (req.query.sort) {
+    case 'modified_asc':
+      sortOptions = { driveModifiedAt: 1 };
+      break;
+    case 'created_desc':
+      sortOptions = { driveCreatedAt: -1 };
+      break;
+    case 'created_asc':
+      sortOptions = { driveCreatedAt: 1 };
+      break;
+    case 'name_asc':
+      sortOptions = { cleanTitle: 1, originalName: 1 };
+      break;
+    case 'name_desc':
+      sortOptions = { cleanTitle: -1, originalName: -1 };
+      break;
+    case 'size_desc':
+      sortOptions = { fileSize: -1 };
+      break;
+    case 'size_asc':
+      sortOptions = { fileSize: 1 };
+      break;
+    case 'duration_desc':
+      sortOptions = { duration: -1 };
+      break;
+    case 'duration_asc':
+      sortOptions = { duration: 1 };
+      break;
+    case 'approval_status':
+      sortOptions = { 'aiMetadata.approvalStatus': -1, driveModifiedAt: -1 };
+      break;
+    default:
+      sortOptions = { driveModifiedAt: -1 };
+  }
+
+  return { query, sortOptions };
 }
 
 // 6. List videos with server-side pagination, search, sorting, and multi-filters (20k+ video library)
@@ -182,129 +289,7 @@ router.get('/', async (req, res, next) => {
       }
     );
 
-    const andConditions = [{ isArchived: false }, driveInfo.accountFilter];
-
-    // Status filter:
-    if (req.query.status) {
-      if (req.query.status === 'all') {
-        // Include queued and published videos. Used by the per-channel board.
-      } else if (req.query.status === 'queued') {
-        // User explicitly asked for Queued videos
-        andConditions.push({
-          $or: [
-            { status: 'queued' },
-            ...(activeQueuedPostVideoIds.length > 0 ? [{ _id: { $in: activeQueuedPostVideoIds } }] : []),
-          ],
-        });
-      } else if (req.query.status === 'published') {
-        // User explicitly asked for Published videos
-        andConditions.push({ status: 'published' });
-      } else {
-        andConditions.push({ status: req.query.status });
-        andConditions.push({ status: { $nin: ['queued', 'published'] } });
-        if (activeQueuedPostVideoIds.length > 0) {
-          andConditions.push({ _id: { $nin: activeQueuedPostVideoIds } });
-        }
-      }
-    } else {
-      // Default Video Library view: DO NOT SHOW videos that are queued or published!
-      andConditions.push({ status: { $nin: ['queued', 'published'] } });
-      if (activeQueuedPostVideoIds.length > 0) {
-        andConditions.push({ _id: { $nin: activeQueuedPostVideoIds } });
-      }
-    }
-
-    // Indexing status filter
-    if (req.query.indexingStatus) {
-      andConditions.push({ indexingStatus: req.query.indexingStatus });
-    }
-
-    // Aspect ratio vertical filter (Shorts/Reels 9:16)
-    if (req.query.isVertical !== undefined && req.query.isVertical !== '') {
-      andConditions.push({ 'resolution.isVertical': req.query.isVertical === 'true' });
-    }
-
-    // AI Approval Status filter
-    if (req.query.approvalStatus) {
-      if (req.query.approvalStatus === 'approved') {
-        andConditions.push({ 'aiMetadata.approvalStatus': 'approved' });
-      } else if (req.query.approvalStatus === 'draft') {
-        andConditions.push({
-          'aiMetadata.approvalStatus': 'draft',
-          'aiMetadata.generatedTitle': { $exists: true, $ne: '' },
-        });
-      } else if (req.query.approvalStatus === 'none') {
-        andConditions.push({
-          $or: [
-            { 'aiMetadata.generatedTitle': { $exists: false } },
-            { 'aiMetadata.generatedTitle': '' },
-            { 'aiMetadata.generatedTitle': null },
-          ],
-        });
-      }
-    }
-
-    // File size filter range (in bytes)
-    if (req.query.minSize || req.query.maxSize) {
-      const sizeCond = {};
-      if (req.query.minSize) sizeCond.$gte = parseInt(req.query.minSize, 10);
-      if (req.query.maxSize) sizeCond.$lte = parseInt(req.query.maxSize, 10);
-      andConditions.push({ fileSize: sizeCond });
-    }
-
-    // Target folder filter
-    if (req.query.folderId) {
-      andConditions.push({
-        $or: [{ folderId: req.query.folderId }, { folderPathIds: req.query.folderId }],
-      });
-    }
-
-    // Search query (clean title, original filename, or notes)
-    if (req.query.search && req.query.search.trim()) {
-      const searchRegex = new RegExp(req.query.search.trim(), 'i');
-      andConditions.push({
-        $or: [{ originalName: searchRegex }, { cleanTitle: searchRegex }, { notes: searchRegex }],
-      });
-    }
-
-    const query = andConditions.length > 1 ? { $and: andConditions } : andConditions[0];
-
-    // Sorting
-    let sortOptions = { driveModifiedAt: -1 };
-    switch (req.query.sort) {
-      case 'modified_asc':
-        sortOptions = { driveModifiedAt: 1 };
-        break;
-      case 'created_desc':
-        sortOptions = { driveCreatedAt: -1 };
-        break;
-      case 'created_asc':
-        sortOptions = { driveCreatedAt: 1 };
-        break;
-      case 'name_asc':
-        sortOptions = { cleanTitle: 1, originalName: 1 };
-        break;
-      case 'name_desc':
-        sortOptions = { cleanTitle: -1, originalName: -1 };
-        break;
-      case 'size_desc':
-        sortOptions = { fileSize: -1 };
-        break;
-      case 'size_asc':
-        sortOptions = { fileSize: 1 };
-        break;
-      case 'duration_desc':
-        sortOptions = { duration: -1 };
-        break;
-      case 'duration_asc':
-        sortOptions = { duration: 1 };
-        break;
-      case 'approval_status':
-        sortOptions = { 'aiMetadata.approvalStatus': -1, driveModifiedAt: -1 };
-        break;
-      default:
-        sortOptions = { driveModifiedAt: -1 };
-    }
+    const { query, sortOptions } = catalogFilters(req, driveInfo, activeQueuedPostVideoIds);
 
     const [videos, total] = await Promise.all([
       Video.find(query).sort(sortOptions).skip(skip).limit(limit),
@@ -363,6 +348,49 @@ router.get('/folders/tree', async (req, res, next) => {
   try {
     const tree = await googleDriveService.listFolderTree();
     res.json({ status: 'success', data: tree });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 6c0. All video IDs matching the current catalog filters (Select All)
+router.get('/ids', async (req, res, next) => {
+  try {
+    const driveInfo = await getConnectedDriveQuery(req.query.accountId);
+    if (!driveInfo.hasConnected) {
+      return res.json({ status: 'success', data: [], pagination: { total: 0 } });
+    }
+
+    const activeQueuedPostVideoIds = await Post.distinct('videoId', {
+      status: { $in: ['scheduled', 'queued', 'processing', 'retrying'] },
+    });
+    const { query, sortOptions } = catalogFilters(req, driveInfo, activeQueuedPostVideoIds);
+    const rows = await Video.find(query).sort(sortOptions).select('_id').lean();
+    const ids = rows.map((row) => String(row._id));
+    res.json({
+      status: 'success',
+      data: ids,
+      pagination: { total: ids.length },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/by-ids', async (req, res, next) => {
+  try {
+    const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const ids = rawIds.map(String).filter(Boolean).slice(0, 3000);
+    if (ids.length === 0) {
+      return res.json({ status: 'success', data: [] });
+    }
+
+    const videos = await Video.find({ _id: { $in: ids }, isArchived: false })
+      .select('cleanTitle originalName duration thumbnailUrl resolution aiMetadata folderId folderPathIds status')
+      .lean();
+    const order = new Map(ids.map((id, index) => [id, index]));
+    videos.sort((a, b) => (order.get(String(a._id)) ?? 0) - (order.get(String(b._id)) ?? 0));
+    res.json({ status: 'success', data: videos });
   } catch (err) {
     next(err);
   }

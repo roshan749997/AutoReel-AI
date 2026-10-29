@@ -35,7 +35,7 @@ export const OverviewModule = ({
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-100">{stats?.indexedVideos ?? 0}</span>
+            <span className="text-2xl font-bold text-slate-900">{stats?.indexedVideos ?? 0}</span>
             <span className="text-xs text-slate-400">files indexed</span>
           </div>
           <p className="text-[11px] text-slate-500 mt-2 flex items-center gap-1 group-hover:text-indigo-400 transition-colors">
@@ -51,7 +51,7 @@ export const OverviewModule = ({
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-100">{stats?.connectedAccounts ?? 0}</span>
+            <span className="text-2xl font-bold text-slate-900">{stats?.connectedAccounts ?? 0}</span>
             <span className="text-xs text-slate-400">connected</span>
           </div>
           <p className="text-[11px] text-slate-500 mt-2 flex items-center gap-1 group-hover:text-purple-400 transition-colors">
@@ -67,7 +67,7 @@ export const OverviewModule = ({
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-100">{stats?.queuedPosts ?? 0}</span>
+            <span className="text-2xl font-bold text-slate-900">{stats?.queuedPosts ?? 0}</span>
             <span className="text-xs text-slate-400">posts ready</span>
           </div>
           <p className="text-[11px] text-slate-500 mt-2 flex items-center gap-1 group-hover:text-amber-400 transition-colors">
@@ -83,7 +83,7 @@ export const OverviewModule = ({
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-100">{stats?.publishedPosts ?? 0}</span>
+            <span className="text-2xl font-bold text-slate-900">{stats?.publishedPosts ?? 0}</span>
             <span className="text-xs text-slate-400">dispatched</span>
           </div>
           <p className="text-[11px] text-slate-500 mt-2 flex items-center gap-1 group-hover:text-emerald-400 transition-colors">
@@ -112,8 +112,8 @@ export const OverviewModule = ({
                   key={item.id}
                   className={`p-3.5 rounded-lg border flex items-start justify-between gap-4 transition-colors ${
                     item.isCompleted
-                      ? 'bg-slate-900/40 border-slate-800 text-slate-300'
-                      : 'bg-slate-800/40 border-slate-700/80 text-slate-200'
+                      ? 'bg-white/40 border-slate-200 text-slate-700'
+                      : 'bg-slate-100/40 border-slate-300/80 text-slate-800'
                   }`}
                 >
                   <div className="flex items-start gap-3">
@@ -123,7 +123,7 @@ export const OverviewModule = ({
                       <AlertCircle className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" />
                     )}
                     <div>
-                      <h4 className="text-xs font-semibold text-slate-200">{item.title}</h4>
+                      <h4 className="text-xs font-semibold text-slate-800">{item.title}</h4>
                       <p className="text-[11px] text-slate-400 mt-0.5">{item.description}</p>
                       {item.metadata?.indexedVideos !== undefined && (
                         <p className="text-[11px] text-indigo-400 mt-1 font-medium">
@@ -160,7 +160,7 @@ export const OverviewModule = ({
                   return (
                     <div
                       key={key}
-                      className="p-3 rounded-lg bg-slate-950/40 border border-slate-800/80 flex items-center justify-between"
+                      className="p-3 rounded-lg bg-slate-50/40 border border-slate-200/80 flex items-center justify-between"
                     >
                       <div>
                         <div className="flex items-center gap-2">
@@ -169,7 +169,7 @@ export const OverviewModule = ({
                               isOk ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
                             }`}
                           />
-                          <span className="text-xs font-semibold text-slate-200">{info?.name || key}</span>
+                          <span className="text-xs font-semibold text-slate-800">{info?.name || key}</span>
                         </div>
                         <p className="text-[10px] text-slate-400 mt-0.5 truncate max-w-[200px]">
                           {info?.message || (isOk ? 'Connected' : 'Pending configuration')}

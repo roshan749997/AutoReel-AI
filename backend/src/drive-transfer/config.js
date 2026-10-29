@@ -14,9 +14,12 @@ export function getDriveTransferConfig() {
   const clientSecret = ownClientSecret || String(process.env.GOOGLE_CLIENT_SECRET || '').trim();
   const port = String(process.env.PORT || '5000').trim();
   const defaultRedirect = `http://localhost:${port}/api/drive-transfer/oauth/callback`;
-  const sharedRedirect = String(process.env.GOOGLE_REDIRECT_URI || '').trim();
+  const registeredYouTubeRedirect = String(process.env.GOOGLE_REDIRECT_URI || '').trim();
+  // A separate Drive OAuth client can use its own callback. The YouTube client only has
+  // GOOGLE_REDIRECT_URI registered, so Drive sign-in on that client must use the same address.
   const redirectUri = String(
-    process.env.DRIVE_TRANSFER_REDIRECT_URI || (ownClientId ? defaultRedirect : sharedRedirect || defaultRedirect)
+    process.env.DRIVE_TRANSFER_REDIRECT_URI
+    || (ownClientId ? defaultRedirect : registeredYouTubeRedirect || defaultRedirect)
   ).trim();
   const scope = String(process.env.DRIVE_TRANSFER_OAUTH_SCOPE || DEFAULT_SCOPE).trim();
   const clientUrl = String(process.env.CLIENT_URL || 'http://localhost:5173').trim();
@@ -35,5 +38,6 @@ export function getDriveTransferConfig() {
     maxFiles: Number.isFinite(maxFiles) && maxFiles > 0 ? maxFiles : 50000,
     configured: missingEnv.length === 0,
     missingEnv,
+    usesYouTubeClient: !ownClientId,
   };
 }

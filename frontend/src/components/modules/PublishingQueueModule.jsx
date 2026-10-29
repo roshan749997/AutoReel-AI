@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ListVideo,
   Youtube,
   Instagram,
+  Folders,
   Clock,
   CheckCircle2,
   AlertTriangle,
@@ -26,11 +27,15 @@ import { Badge } from '../common/Badge.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
 import { Modal } from '../common/Modal.jsx';
 import { api } from '../../api/client.js';
+import { ChannelSwitcher } from '../common/ChannelSwitcher.jsx';
+import { channelTitle, findPairForPost } from '../../utils/channelPairs.js';
 
 export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onNavigate }) => {
   const [filterStatus, setFilterStatus] = useState('upcoming');
   const [showUnlinked, setShowUnlinked] = useState(false);
   const [accountFilter, setAccountFilter] = useState('all');
+  const [channelFilter, setChannelFilter] = useState('');
+  const [channelPairs, setChannelPairs] = useState([]);
   const [platformFilter, setPlatformFilter] = useState('all');
   const [activeLogPost, setActiveLogPost] = useState(null);
   const [isActionLoading, setIsActionLoading] = useState(false);
@@ -47,6 +52,20 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
     hashtags: '',
     timezone: 'UTC',
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getChannelPairs()
+      .then((res) => {
+        if (!cancelled) setChannelPairs(Array.isArray(res.data) ? res.data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setChannelPairs([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const upcomingStatuses = ['scheduled', 'queued', 'processing', 'retrying', 'paused'];
   const statusLabels = {
@@ -66,19 +85,27 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
       const accId = p.accountId?._id || p.accountId;
       if (accId !== accountFilter) return false;
     }
+    if (channelFilter) {
+      const pair = findPairForPost(channelPairs, p);
+      if (!pair || String(pair.folderId) !== String(channelFilter)) return false;
+    }
     return true;
   });
 
   const accountGroups = [];
   const seenAccounts = new Map();
   for (const post of filteredPosts) {
-    const id = String(post.accountId?._id || post.accountId || 'unknown');
+    const pair = findPairForPost(channelPairs, post);
+    const id = pair ? `pair:${pair.folderId}` : String(post.accountId?._id || post.accountId || 'unknown');
     let group = seenAccounts.get(id);
     if (!group) {
       group = {
         id,
-        name: post.accountId?.accountName || accounts.find((account) => account._id === (post.accountId?._id || post.accountId))?.accountName || 'No channel linked',
+        name: pair
+          ? channelTitle(pair, accounts)
+          : post.accountId?.accountName || accounts.find((account) => account._id === (post.accountId?._id || post.accountId))?.accountName || 'No channel linked',
         platform: post.accountId?.platform || post.platform,
+        folderName: pair?.folderName || post.videoId?.folderName || '',
         posts: [],
       };
       seenAccounts.set(id, group);
@@ -244,7 +271,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
       case 'published':
         return <Badge variant="success" dot className="capitalize text-[10px]">Done</Badge>;
       case 'manual_review':
-        return <Badge variant="warning" dot className="capitalize text-[10px] text-amber-300 bg-amber-950/40 border-amber-500/30">Manual Review</Badge>;
+        return <Badge variant="warning" dot className="capitalize text-[10px] text-amber-800 bg-amber-50/40 border-amber-500/30">Manual Review</Badge>;
       case 'failed':
         return <Badge variant="error" dot className="capitalize text-[10px]">Failed</Badge>;
       case 'retrying':
@@ -271,8 +298,8 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
         <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold text-slate-100">Where each video is going</h3>
-              <span className="text-xs px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400">
+              <h3 className="text-sm font-semibold text-slate-900">Where each video is going</h3>
+              <span className="text-xs px-2 py-0.5 rounded bg-white border border-slate-200 text-slate-400">
                 {posts.length} posts
               </span>
               {posts.length > 0 && (
@@ -280,7 +307,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
                   type="button"
                   onClick={() => handlePurgeQueue(false)}
                   disabled={isActionLoading}
-                  className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded bg-red-950/40 border border-red-800/50 text-red-400 hover:bg-red-900/50 hover:text-red-300 transition-colors cursor-pointer"
+                  className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded bg-red-50/40 border border-red-200/50 text-red-400 hover:bg-red-900/50 hover:text-red-700 transition-colors cursor-pointer"
                   title="Remove old failed, cancelled, and completed posts from queue"
                 >
                   <Trash2 className="w-3 h-3" />
@@ -289,12 +316,12 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
               )}
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              One row is one upload. The channel name is the account that will receive that video.
+              Pick a channel to see only that folder’s uploads. One row is one video going to YouTube or Instagram.
             </p>
           </div>
 
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-            <div className="flex flex-wrap items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs max-w-full overflow-x-auto">
+            <div className="flex flex-wrap items-center gap-1 bg-slate-50 p-1 rounded-lg border border-slate-200 text-xs max-w-full overflow-x-auto">
               {Object.entries(statusLabels).map(([id, label]) => {
                 const count = posts.filter((post) => {
                   if (id === 'all') return true;
@@ -308,7 +335,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
                     className={`px-2 py-1 rounded-md font-medium text-[11px] transition-colors whitespace-nowrap ${
                       filterStatus === id
                         ? 'bg-indigo-600 text-white shadow-sm'
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-850'
+                        : 'text-slate-400 hover:text-slate-800 hover:bg-slate-850'
                     }`}
                   >
                     {label} {count}
@@ -321,7 +348,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
               <select
                 value={platformFilter}
                 onChange={(e) => setPlatformFilter(e.target.value)}
-                className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none"
+                className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-700 focus:outline-none"
               >
                 <option value="all">All Platforms</option>
                 <option value="youtube">YouTube</option>
@@ -332,7 +359,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
                 <select
                   value={accountFilter}
                   onChange={(e) => setAccountFilter(e.target.value)}
-                  className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none max-w-[150px] truncate"
+                  className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-700 focus:outline-none max-w-[150px] truncate"
                 >
                   <option value="all">All Accounts</option>
                   {accounts.map((a) => (
@@ -345,13 +372,22 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
             </div>
           </div>
         </div>
+        <div className="mt-4 pt-4 border-t border-slate-200/60">
+          <ChannelSwitcher
+            pairs={channelPairs}
+            accounts={accounts}
+            selectedFolderId={channelFilter}
+            onSelect={setChannelFilter}
+            onOpenChannels={onNavigate ? () => onNavigate('channels') : undefined}
+          />
+        </div>
       </Card>
 
       {/* 2. Posts List */}
       <Card>
         <CardHeader
           title="Posts by channel"
-          subtitle={`${filteredPosts.length} showing. Open a channel to see its videos.`}
+          subtitle={`${filteredPosts.length} showing. Each block is one Drive folder and the accounts linked to it.`}
         />
 
         {filteredPosts.length === 0 ? (
@@ -370,16 +406,26 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
                   <div className="flex items-center gap-2 min-w-0">
                     <div
                       className={`w-7 h-7 rounded-lg flex items-center justify-center border ${
-                        group.platform === 'youtube'
+                        String(group.id).startsWith('pair:')
+                          ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
+                          : group.platform === 'youtube'
                           ? 'bg-red-500/10 text-red-400 border-red-500/20'
                           : 'bg-pink-500/10 text-pink-400 border-pink-500/20'
                       }`}
                     >
-                      {group.platform === 'youtube' ? <Youtube className="w-3.5 h-3.5" /> : <Instagram className="w-3.5 h-3.5" />}
+                      {String(group.id).startsWith('pair:') ? (
+                        <Folders className="w-3.5 h-3.5" />
+                      ) : group.platform === 'youtube' ? (
+                        <Youtube className="w-3.5 h-3.5" />
+                      ) : (
+                        <Instagram className="w-3.5 h-3.5" />
+                      )}
                     </div>
                     <div className="min-w-0">
-                      <h4 className="text-xs font-semibold text-slate-100 truncate">Going to {group.name}</h4>
-                      <p className="text-[10px] uppercase tracking-wide text-slate-500">{group.platform === 'youtube' ? 'YouTube' : 'Instagram'}</p>
+                      <h4 className="text-xs font-semibold text-slate-900 truncate">{group.name}</h4>
+                      <p className="text-[10px] uppercase tracking-wide text-slate-500">
+                        {group.folderName ? `Folder · ${group.folderName}` : group.platform === 'youtube' ? 'YouTube' : 'Instagram'}
+                      </p>
                     </div>
                   </div>
                   <span className="text-[11px] text-slate-500 shrink-0">{group.posts.length} videos</span>
@@ -394,7 +440,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
               return (
                 <div
                   key={post._id}
-                  className="p-4 rounded-xl bg-slate-950/40 border border-slate-800/80 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 hover:border-slate-700/80 transition-colors"
+                  className="p-4 rounded-xl bg-slate-50/40 border border-slate-200/80 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 hover:border-slate-300/80 transition-colors"
                 >
                   {/* Left: Platform & Post Details */}
                   <div className="flex items-start gap-3.5 flex-1 min-w-0">
@@ -410,13 +456,13 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
 
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <h4 className="text-xs font-semibold text-slate-100 truncate max-w-md">
+                        <h4 className="text-xs font-semibold text-slate-900 truncate max-w-md">
                           {post.videoId?.cleanTitle || post.videoId?.originalName || post.title}
                         </h4>
                         {getStatusBadge(post.status)}
                       </div>
 
-                      <p className="text-xs text-slate-300 mt-0.5">
+                      <p className="text-xs text-slate-700 mt-0.5">
                         {isYt ? 'YouTube' : 'Instagram'} · {post.accountId?.accountName || group.name}
                         {post.videoId?.folderName ? ` · Folder ${post.videoId.folderName}` : ''}
                       </p>
@@ -450,14 +496,14 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
                   </div>
 
                   {/* Right: Actions */}
-                  <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto justify-end border-t md:border-t-0 pt-3 md:pt-0 border-slate-800">
+                  <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto justify-end border-t md:border-t-0 pt-3 md:pt-0 border-slate-200">
                     {/* View External URL if published */}
                     {post.publishDetails?.externalUrl && (
                       <a
                         href={post.publishDetails.externalUrl}
                         target="_blank"
                         rel="noreferrer"
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors"
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-slate-900 hover:bg-slate-100 transition-colors"
                         title="View published video"
                       >
                         <ExternalLink className="w-4 h-4" />
@@ -470,7 +516,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
                       size="sm"
                       icon={Info}
                       onClick={() => setActiveLogPost(post)}
-                      className="text-xs text-slate-400 hover:text-slate-200 py-1"
+                      className="text-xs text-slate-400 hover:text-slate-800 py-1"
                     >
                       Details
                     </Button>
@@ -593,13 +639,13 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
                 <button
                   type="button"
                   onClick={() => setShowUnlinked((open) => !open)}
-                  className="text-xs text-slate-400 hover:text-slate-200"
+                  className="text-xs text-slate-400 hover:text-slate-800"
                 >
                   {showUnlinked ? 'Hide' : 'Show'} {accountGroups.find((group) => group.name === 'No channel linked')?.posts.length || 0} old posts with no channel
                 </button>
                 {showUnlinked && accountGroups.find((group) => group.name === 'No channel linked')?.posts.map((post) => (
-                  <div key={post._id} className="p-3 rounded-lg border border-slate-800 text-xs text-slate-400">
-                    <span className="text-slate-200">{post.videoId?.originalName || post.title}</span>
+                  <div key={post._id} className="p-3 rounded-lg border border-slate-200 text-xs text-slate-400">
+                    <span className="text-slate-800">{post.videoId?.originalName || post.title}</span>
                     <span className="ml-2 capitalize">{post.platform}</span>
                     <span className="ml-2">{post.status}</span>
                   </div>
@@ -617,14 +663,14 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
         title={`Audit Trail: ${activeLogPost?.title}`}
       >
         <div className="space-y-4 text-xs max-h-[70vh] overflow-y-auto">
-          <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-1">
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-1">
             <div className="flex justify-between text-slate-400 text-[11px]">
               <span>Idempotency Key:</span>
-              <span className="font-mono text-slate-200">{activeLogPost?.idempotencyKey || 'None'}</span>
+              <span className="font-mono text-slate-800">{activeLogPost?.idempotencyKey || 'None'}</span>
             </div>
             <div className="flex justify-between text-slate-400 text-[11px]">
               <span>Timezone:</span>
-              <span className="text-slate-200">{activeLogPost?.timezone || 'UTC'}</span>
+              <span className="text-slate-800">{activeLogPost?.timezone || 'UTC'}</span>
             </div>
             <div className="flex justify-between text-slate-400 text-[11px]">
               <span>Current Status:</span>
@@ -641,10 +687,10 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
                   key={i}
                   className={`p-3 rounded-lg border font-mono text-[11px] ${
                     log.level === 'error'
-                      ? 'bg-rose-950/20 border-rose-500/30 text-rose-300'
+                      ? 'bg-rose-50/20 border-rose-500/30 text-rose-700'
                       : log.level === 'warn'
-                      ? 'bg-amber-950/20 border-amber-500/30 text-amber-300'
-                      : 'bg-slate-950 border-slate-800 text-slate-300'
+                      ? 'bg-amber-50/20 border-amber-500/30 text-amber-800'
+                      : 'bg-slate-50 border-slate-200 text-slate-700'
                   }`}
                 >
                   <div className="flex items-center justify-between text-slate-500 mb-1">
@@ -667,22 +713,22 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
       >
         <form onSubmit={handleConfirmReschedule} className="space-y-4 text-xs">
           <div>
-            <label className="block text-slate-300 font-medium mb-1">New Scheduled Date & Time:</label>
+            <label className="block text-slate-700 font-medium mb-1">New Scheduled Date & Time:</label>
             <input
               type="datetime-local"
               value={rescheduleDate}
               onChange={(e) => setRescheduleDate(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-800 focus:outline-none"
               required
             />
           </div>
 
           <div>
-            <label className="block text-slate-300 font-medium mb-1">Target Timezone:</label>
+            <label className="block text-slate-700 font-medium mb-1">Target Timezone:</label>
             <select
               value={rescheduleTimezone}
               onChange={(e) => setRescheduleTimezone(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-800 focus:outline-none"
             >
               <option value="UTC">UTC (Coordinated Universal Time)</option>
               <option value="Asia/Kolkata">Asia/Kolkata (IST +5:30)</option>
@@ -692,7 +738,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
             </select>
           </div>
 
-          <div className="pt-3 border-t border-slate-800 flex justify-end gap-2">
+          <div className="pt-3 border-t border-slate-200 flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => setReschedulePostItem(null)}>
               Cancel
             </Button>
@@ -711,37 +757,37 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
       >
         <form onSubmit={handleSaveEdit} className="space-y-4 text-xs">
           <div>
-            <label className="block text-slate-300 font-medium mb-1">Title:</label>
+            <label className="block text-slate-700 font-medium mb-1">Title:</label>
             <input
               type="text"
               value={editForm.title}
               onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-800 focus:outline-none"
               required
             />
           </div>
 
           <div>
-            <label className="block text-slate-300 font-medium mb-1">Caption:</label>
+            <label className="block text-slate-700 font-medium mb-1">Caption:</label>
             <textarea
               rows={3}
               value={editForm.caption}
               onChange={(e) => setEditForm({ ...editForm, caption: e.target.value })}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-800 focus:outline-none"
             />
           </div>
 
           <div>
-            <label className="block text-slate-300 font-medium mb-1">Hashtags (space separated):</label>
+            <label className="block text-slate-700 font-medium mb-1">Hashtags (space separated):</label>
             <input
               type="text"
               value={editForm.hashtags}
               onChange={(e) => setEditForm({ ...editForm, hashtags: e.target.value })}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-800 focus:outline-none"
             />
           </div>
 
-          <div className="pt-3 border-t border-slate-800 flex justify-end gap-2">
+          <div className="pt-3 border-t border-slate-200 flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => setEditPostItem(null)}>
               Cancel
             </Button>

@@ -33,7 +33,7 @@ router.get('/', async (req, res, next) => {
     }
 
     const posts = await Post.find(query)
-      .populate('videoId', 'cleanTitle originalName driveFileId thumbnailUrl duration resolution aiMetadata folderId folderName')
+      .populate('videoId', 'cleanTitle originalName driveFileId thumbnailUrl duration resolution aiMetadata folderId folderName folderPathIds folderPathNames')
       .populate('accountId', 'accountName platform profilePictureUrl username status')
       .sort({ scheduledAt: 1 });
 
@@ -203,7 +203,19 @@ router.post(
       const allCreatedPosts = [];
       const allErrors = [];
 
+      // 1. Preload all referenced accounts in a single query to eliminate N+1 DB lookups
+      const allAccountIds = new Set();
       for (const item of items) {
+        const targets = item.targets || item.platforms || [];
+        for (const t of targets) {
+          if (t.accountId) allAccountIds.add(String(t.accountId));
+        }
+      }
+      const accountsList = await Account.find({ _id: { $in: Array.from(allAccountIds) } }).lean();
+      const accountMap = new Map(accountsList.map((a) => [String(a._id), a]));
+
+      // 2. Helper to process a single video item
+      const processItem = async (item) => {
         const {
           videoId,
           targets,
@@ -223,27 +235,31 @@ router.post(
             videoId,
             error: 'Missing required fields (videoId, scheduledAt, or targets)',
           });
-          continue;
+          return;
         }
 
-        // If autoApprove is set, ensure video metadata is approved upfront
+        // If autoApprove is set, ensure video metadata is approved
         if (autoApprove) {
-          const video = await Video.findById(videoId);
-          if (video && video.aiMetadata?.approvalStatus !== 'approved') {
-            if (!video.aiMetadata) video.aiMetadata = {};
-            video.aiMetadata.approvalStatus = 'approved';
-            video.aiMetadata.approvedAt = new Date();
-            if (title) {
-              video.aiMetadata.youtubeTitle = title;
-              video.aiMetadata.generatedTitle = title;
+          try {
+            const video = await Video.findById(videoId);
+            if (video && video.aiMetadata?.approvalStatus !== 'approved') {
+              if (!video.aiMetadata) video.aiMetadata = {};
+              video.aiMetadata.approvalStatus = 'approved';
+              video.aiMetadata.approvedAt = new Date();
+              if (title) {
+                video.aiMetadata.youtubeTitle = title;
+                video.aiMetadata.generatedTitle = title;
+              }
+              if (caption) video.aiMetadata.instagramCaption = caption;
+              if (hashtags) {
+                video.aiMetadata.hashtags = Array.isArray(hashtags)
+                  ? hashtags
+                  : String(hashtags).split(/[\s,]+/).filter(Boolean);
+              }
+              await video.save();
             }
-            if (caption) video.aiMetadata.instagramCaption = caption;
-            if (hashtags) {
-              video.aiMetadata.hashtags = Array.isArray(hashtags)
-                ? hashtags
-                : String(hashtags).split(/[\s,]+/).filter(Boolean);
-            }
-            await video.save();
+          } catch {
+            // Non-blocking metadata sync
           }
         }
 
@@ -254,7 +270,7 @@ router.post(
           try {
             let targetPlatform = target.platform;
             if (!targetPlatform) {
-              const acc = await Account.findById(target.accountId);
+              const acc = accountMap.get(String(target.accountId));
               if (!acc) throw new Error(`Account ${target.accountId} not found`);
               targetPlatform = acc.platform;
             }
@@ -291,6 +307,13 @@ router.post(
           scheduledCount: itemCreated.length,
           errors: itemErrors,
         });
+      };
+
+      // 3. Process items in concurrency chunks of 5
+      const CHUNK_SIZE = 5;
+      for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+        const chunk = items.slice(i, i + CHUNK_SIZE);
+        await Promise.all(chunk.map((item) => processItem(item)));
       }
 
       const totalScheduled = allCreatedPosts.length;

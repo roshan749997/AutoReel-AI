@@ -55,7 +55,7 @@ export const LogsModule = ({ logs, onReload, pagination, onFilterChange }) => {
           <div className="flex flex-wrap items-center gap-2">
             <select
               onChange={(e) => onFilterChange({ module: e.target.value })}
-              className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none"
+              className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-700 focus:outline-none"
             >
               <option value="">All Modules</option>
               <option value="drive">Drive</option>
@@ -69,7 +69,7 @@ export const LogsModule = ({ logs, onReload, pagination, onFilterChange }) => {
 
             <select
               onChange={(e) => onFilterChange({ level: e.target.value })}
-              className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none"
+              className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-700 focus:outline-none"
             >
               <option value="">All Levels</option>
               <option value="info">Info</option>
@@ -119,7 +119,7 @@ export const LogsModule = ({ logs, onReload, pagination, onFilterChange }) => {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-950/60 text-slate-400 font-semibold border-b border-slate-800/80">
+              <thead className="bg-slate-50/60 text-slate-400 font-semibold border-b border-slate-200/80">
                 <tr>
                   <th className="py-2.5 px-3">Timestamp</th>
                   <th className="py-2.5 px-3">Level</th>
@@ -129,7 +129,7 @@ export const LogsModule = ({ logs, onReload, pagination, onFilterChange }) => {
                   <th className="py-2.5 px-3 text-right">Details</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/60 font-mono">
+              <tbody className="divide-y divide-slate-200/60 font-mono">
                 {logs.map((log) => (
                   <tr key={log._id} className="hover:bg-slate-850/40 transition-colors">
                     <td className="py-2.5 px-3 text-slate-400 whitespace-nowrap text-[11px]">
@@ -143,11 +143,11 @@ export const LogsModule = ({ logs, onReload, pagination, onFilterChange }) => {
                     </td>
                     <td className="py-2.5 px-3">{getLevelBadge(log.level)}</td>
                     <td className="py-2.5 px-3">
-                      <span className="px-2 py-0.5 rounded text-[10px] uppercase font-semibold bg-slate-800 text-slate-300">
+                      <span className="px-2 py-0.5 rounded text-[10px] uppercase font-semibold bg-slate-100 text-slate-700">
                         {log.module}
                       </span>
                     </td>
-                    <td className="py-2.5 px-3 text-slate-300 text-[11px] font-sans font-medium">
+                    <td className="py-2.5 px-3 text-slate-700 text-[11px] font-sans font-medium">
                       {log.action}
                     </td>
                     <td className="py-2.5 px-3 text-slate-400 font-sans truncate max-w-xs">
@@ -157,7 +157,7 @@ export const LogsModule = ({ logs, onReload, pagination, onFilterChange }) => {
                       {log.metadata ? (
                         <button
                           onClick={() => setSelectedLog(log)}
-                          className="p-1 rounded text-slate-400 hover:text-indigo-400 hover:bg-slate-800"
+                          className="p-1 rounded text-slate-400 hover:text-indigo-400 hover:bg-slate-100"
                           title="View metadata"
                         >
                           <Code2 className="w-4 h-4" />
@@ -181,14 +181,14 @@ export const LogsModule = ({ logs, onReload, pagination, onFilterChange }) => {
         title={`Log Metadata: ${selectedLog?.action}`}
       >
         <div className="space-y-3 text-xs">
-          <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 font-sans">
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 font-sans">
             <span className="text-slate-400 block mb-1">Message:</span>
-            <p className="text-slate-100 font-medium">{selectedLog?.message}</p>
+            <p className="text-slate-900 font-medium">{selectedLog?.message}</p>
           </div>
 
           <div>
             <span className="text-slate-400 block mb-1 font-sans">Payload Metadata:</span>
-            <pre className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-indigo-300 overflow-x-auto font-mono text-[11px]">
+            <pre className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-indigo-700 overflow-x-auto font-mono text-[11px]">
               {JSON.stringify(selectedLog?.metadata, null, 2)}
             </pre>
           </div>

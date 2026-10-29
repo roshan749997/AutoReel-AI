@@ -212,14 +212,14 @@ export function DriveTransferModule() {
         <div className="flex flex-wrap items-start gap-3 text-xs text-slate-400">
           <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
           <p>
-            This page uses its own Google sign-in and the <span className="text-slate-200">/api/drive-transfer</span> routes.
+            This page uses its own Google sign-in and the <span className="text-slate-800">/api/drive-transfer</span> routes.
             It does not change YouTube upload, Instagram publishing, Drive indexing, or the scheduler.
           </p>
         </div>
       </Card>
 
       {(notice || error) && (
-        <div className={`rounded-lg border px-4 py-3 text-sm ${error ? 'border-rose-500/40 bg-rose-950/40 text-rose-200' : 'border-emerald-500/30 bg-emerald-950/30 text-emerald-200'}`}>
+        <div className={`rounded-lg border px-4 py-3 text-sm ${error ? 'border-rose-500/40 bg-rose-50/40 text-rose-800' : 'border-emerald-500/30 bg-emerald-50/30 text-emerald-800'}`}>
           <div className="flex items-start gap-2">
             {error ? <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" /> : <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />}
             <span>{error || notice}</span>
@@ -228,10 +228,10 @@ export function DriveTransferModule() {
       )}
 
       <Card>
-        <CardHeader title="Drive Transfer account" subtitle="Separate consent from Social Accounts" />
+        <CardHeader title="Drive account" subtitle="Separate from YouTube and Instagram on Social Accounts" />
         {!configured && (
-          <div className="text-sm text-slate-300 space-y-2">
-            <p>Add these variables to <span className="font-mono text-slate-100">backend/.env</span>, then restart the API. Do not replace the existing Google client variables.</p>
+          <div className="text-sm text-slate-700 space-y-2">
+            <p>Add these variables to <span className="font-mono text-slate-900">backend/.env</span>, then restart the API. Do not replace the existing Google client variables.</p>
             <ul className="font-mono text-xs text-slate-400 space-y-1">
               {(auth?.missingEnv || ['DRIVE_TRANSFER_GOOGLE_CLIENT_ID', 'DRIVE_TRANSFER_GOOGLE_CLIENT_SECRET']).map((name) => (
                 <li key={name}>{name}</li>
@@ -242,9 +242,9 @@ export function DriveTransferModule() {
         )}
         {configured && (
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="text-sm text-slate-300">
+            <div className="text-sm text-slate-700">
               {connected ? (
-                <span>Connected as <span className="text-slate-100">{auth.email || 'Google account'}</span></span>
+                <span>Connected as <span className="text-slate-900">{auth.email || 'Google account'}</span></span>
               ) : (
                 <span>Not connected. Click Connect Drive. Check access and Dry-run stay off until that finishes.</span>
               )}
@@ -283,7 +283,7 @@ export function DriveTransferModule() {
                   value={pair.sourceUrl}
                   onChange={(event) => updatePair(pair.id, 'sourceUrl', event.target.value)}
                   placeholder="https://drive.google.com/drive/folders/…"
-                  className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
                 />
               </label>
               <label className="block text-xs text-slate-400">
@@ -292,7 +292,7 @@ export function DriveTransferModule() {
                   value={pair.destinationUrl}
                   onChange={(event) => updatePair(pair.id, 'destinationUrl', event.target.value)}
                   placeholder="https://drive.google.com/drive/folders/…"
-                  className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
                 />
               </label>
               {pairs.length > 1 && (
@@ -312,12 +312,12 @@ export function DriveTransferModule() {
           </p>
         </div>
         {validation.length > 0 && (
-          <div className="mt-4 space-y-2 text-xs text-slate-300">
+          <div className="mt-4 space-y-2 text-xs text-slate-700">
             {validation.map((item) => (
-              <div key={`${item.source.id}-${item.destination.id}`} className="rounded-lg border border-slate-800 px-3 py-2">
-                <span className="text-slate-100">{item.source.name}</span>
+              <div key={`${item.source.id}-${item.destination.id}`} className="rounded-lg border border-slate-200 px-3 py-2">
+                <span className="text-slate-900">{item.source.name}</span>
                 <span className="text-slate-500"> → </span>
-                <span className="text-slate-100">{item.destination.name}</span>
+                <span className="text-slate-900">{item.destination.name}</span>
               </div>
             ))}
           </div>
@@ -328,7 +328,7 @@ export function DriveTransferModule() {
             <select
               value={parallelCopies}
               onChange={(event) => changeSpeed(event.target.value)}
-              className="mt-1.5 block rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+              className="mt-1.5 block rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
             >
               <option value={1}>1 · slowest</option>
               <option value={3}>3</option>
@@ -366,14 +366,14 @@ export function DriveTransferModule() {
           )}
         </div>
         {queue.length > 0 && (
-          <div className="mt-4 rounded-lg border border-slate-800 px-3 py-3">
+          <div className="mt-4 rounded-lg border border-slate-200 px-3 py-3">
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs uppercase tracking-wide text-slate-400">Waiting · {queue.length}</p>
               <Button variant="ghost" size="sm" onClick={cancelQueued} isLoading={pending === 'cancel-queue'}>
                 Clear waiting
               </Button>
             </div>
-            <ul className="mt-2 space-y-1 text-sm text-slate-300">
+            <ul className="mt-2 space-y-1 text-sm text-slate-700">
               {queue.map((row, index) => (
                 <li key={row.jobId}>
                   {index + 1}. {row.sourceFolderName || 'Source'} → {row.destinationFolderName || 'Destination'}
@@ -383,7 +383,7 @@ export function DriveTransferModule() {
           </div>
         )}
         {!connected && (
-          <p className="mt-3 text-xs text-amber-200">
+          <p className="mt-3 text-xs text-amber-800">
             Paste both folder links, then click Connect Drive. Copy files stays off until a dry-run preview finishes.
           </p>
         )}
@@ -398,7 +398,7 @@ export function DriveTransferModule() {
           />
           {job.mode === 'copy' && (
             <div className="mb-4">
-              <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
+              <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
                 <div className="h-full bg-indigo-500" style={{ width: `${progress}%` }} />
               </div>
               <p className="mt-2 text-xs text-slate-400">
@@ -407,7 +407,7 @@ export function DriveTransferModule() {
             </div>
           )}
           {job.status === 'scanning' && (
-            <p className="mb-4 text-sm text-slate-300">Scanning folders. This preview does not create or download files.</p>
+            <p className="mb-4 text-sm text-slate-700">Scanning folders. This preview does not create or download files.</p>
           )}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             <Stat label="Total files" value={job.totalFiles} />
@@ -418,10 +418,10 @@ export function DriveTransferModule() {
             <Stat label="Failed" value={job.failedFiles} />
           </div>
           {job.errorMessage && (
-            <p className="mt-4 text-sm text-amber-200">{job.errorMessage}</p>
+            <p className="mt-4 text-sm text-amber-800">{job.errorMessage}</p>
           )}
           {job.status === 'preview_ready' && (
-            <p className="mt-4 text-sm text-slate-300">
+            <p className="mt-4 text-sm text-slate-700">
               Preview finished. Skipped files already match the destination and will be left alone. Copy creates new files only inside the destination.
             </p>
           )}
@@ -433,9 +433,9 @@ export function DriveTransferModule() {
           <CardHeader title="Files that need attention" subtitle="Permissions, quota, inaccessible shares, and unsupported copies" />
           <ul className="space-y-3">
             {failures.map((item) => (
-              <li key={`${item.path}-${item.code}`} className="text-sm border-b border-slate-800/80 pb-3 last:border-0">
+              <li key={`${item.path}-${item.code}`} className="text-sm border-b border-slate-200/80 pb-3 last:border-0">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-100">{item.path || item.name}</span>
+                  <span className="text-slate-900">{item.path || item.name}</span>
                   <span className="text-[10px] uppercase tracking-wide text-slate-400">{item.code}</span>
                 </div>
                 <p className="text-xs text-slate-400 mt-1">{item.message}</p>
@@ -450,8 +450,8 @@ export function DriveTransferModule() {
 
 function Stat({ label, value }) {
   return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2">
-      <div className="text-lg font-semibold text-slate-100">{value ?? 0}</div>
+    <div className="rounded-lg border border-slate-200 bg-slate-50/40 px-3 py-2">
+      <div className="text-lg font-semibold text-slate-900">{value ?? 0}</div>
       <div className="text-[11px] uppercase tracking-wide text-slate-500">{label}</div>
     </div>
   );

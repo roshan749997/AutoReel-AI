@@ -4,10 +4,11 @@ Configure official OAuth 2.0 publishing for YouTube Shorts & Videos.
 
 ## Step 1: Enable API & Scopes
 1. In the same Google Cloud Console project used for Google Drive, ensure **YouTube Data API v3** is enabled.
-2. In **OAuth Consent Screen**, add the publishing scopes:
+2. In **OAuth Consent Screen**, add only these publishing scopes for YouTube channel connect:
    - `https://www.googleapis.com/auth/youtube.upload`
    - `https://www.googleapis.com/auth/youtube`
    - `https://www.googleapis.com/auth/youtube.readonly`
+   Do not add `drive`, `drive.file`, `drive.readonly`, `userinfo.email`, or `userinfo.profile` to this request. A YouTube Brand Account cannot grant those services, and Google then opens `accounts.google.com/info/servicerestricted`. Drive uses the separate Drive Transfer sign-in.
 
 ## Step 2: Quota Considerations (100% Free)
 - Default free daily quota: **10,000 units/day**.

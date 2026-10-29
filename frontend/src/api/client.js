@@ -5,8 +5,13 @@ async function request(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`;
   const storedKey = typeof window !== 'undefined' ? localStorage.getItem('dashboard_api_key') : '';
   const apiKey = API_KEY || storedKey;
+  const timeoutMs = options.timeoutMs || 25000;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   const config = {
+    signal: options.signal || controller.signal,
     headers: {
       'Content-Type': 'application/json',
       ...(apiKey && { 'x-api-key': apiKey }),
@@ -29,13 +34,22 @@ async function request(endpoint, options = {}) {
         (Array.isArray(data.data?.errors) ? data.data.errors.map((e) => e.error).join('; ') : null) ||
         data.error ||
         `Request failed with status ${res.status}`;
-      throw new Error(errorMsg);
+      const apiErr = new Error(errorMsg);
+      apiErr.data = data;
+      apiErr.errors = data.data?.errors || data.errors;
+      throw apiErr;
     }
 
     return data;
   } catch (err) {
-    console.error(`[API Client Error] ${endpoint}:`, err.message);
+    if (err.name === 'AbortError') {
+      console.warn(`[API Client Timeout] Request to ${endpoint} timed out after ${timeoutMs}ms`);
+    } else {
+      console.error(`[API Client Error] ${endpoint}:`, err.message);
+    }
     throw err;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -54,6 +68,7 @@ export const api = {
   updateAccountPreferences: (id, preferences) =>
     request(`/accounts/${id}/preferences`, { method: 'PATCH', body: preferences }),
   getGoogleAuthUrl: () => request('/accounts/google/auth-url'),
+  getYouTubeAuthUrl: () => request('/accounts/google/auth-url'),
   getMetaAuthUrl: () => request('/accounts/meta/auth-url'),
   testAccount: (id) => request(`/accounts/${id}/test`, { method: 'POST' }),
   disconnectAccount: (id) => request(`/accounts/${id}/disconnect`, { method: 'POST' }),
@@ -63,6 +78,16 @@ export const api = {
     return request(`/accounts/${id}/history${query ? `?${query}` : ''}`);
   },
   purgeDemoAccounts: () => request('/accounts/purge-demo', { method: 'POST' }),
+  getChannelPairs: () => request('/channels'),
+  saveChannelPair: (pair) => request(`/channels/${encodeURIComponent(pair.folderId)}`, {
+    method: 'PUT',
+    body: {
+      folderName: pair.folderName || '',
+      youtubeAccountId: pair.youtubeAccountId || '',
+      instagramAccountId: pair.instagramAccountId || '',
+    },
+  }),
+  deleteChannelPair: (folderId) => request(`/channels/${encodeURIComponent(folderId)}`, { method: 'DELETE' }),
 
   // Video Library (20k+ Google Drive library)
   getDriveStatus: () => request('/videos/drive/status'),
@@ -83,6 +108,11 @@ export const api = {
     const query = new URLSearchParams(params).toString();
     return request(`/videos${query ? `?${query}` : ''}`);
   },
+  getVideoIds: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/videos/ids${query ? `?${query}` : ''}`);
+  },
+  getVideosByIds: (ids = []) => request('/videos/by-ids', { method: 'POST', body: { ids } }),
   syncVideos: (options = {}) => request('/videos/sync/start', { method: 'POST', body: options }),
   retryVideo: (id) => request(`/videos/${id}/retry`, { method: 'POST' }),
   getVideo: (id) => request(`/videos/${id}`),
@@ -104,7 +134,7 @@ export const api = {
   },
   createPost: (postData) => request('/posts', { method: 'POST', body: postData }),
   scheduleMultiPlatform: (postData) => request('/posts/multi-platform', { method: 'POST', body: postData }),
-  batchSchedule: (items) => request('/posts/batch-schedule', { method: 'POST', body: { items } }),
+  batchSchedule: (items) => request('/posts/batch-schedule', { method: 'POST', body: { items }, timeoutMs: 120000 }),
   getPost: (id) => request(`/posts/${id}`),
   updatePost: (id, updates) => request(`/posts/${id}`, { method: 'PATCH', body: updates }),
   pausePost: (id) => request(`/posts/${id}/pause`, { method: 'POST' }),

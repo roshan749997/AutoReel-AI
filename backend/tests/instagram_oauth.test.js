@@ -22,6 +22,7 @@ test('Instagram OAuth: Generates valid Instagram API with Instagram Login URL by
     assert.equal(parsed.searchParams.get('client_id'), 'test_meta_app_12345');
     assert.equal(parsed.searchParams.get('redirect_uri'), config.meta.redirectUri);
     assert.equal(parsed.searchParams.get('response_type'), 'code');
+    assert.equal(parsed.searchParams.get('force_reauth'), 'true');
 
     // Security state parameter verification
     const state = parsed.searchParams.get('state');

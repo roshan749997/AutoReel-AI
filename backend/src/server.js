@@ -15,6 +15,7 @@ import aiRoutes from './routes/aiRoutes.js';
 import workflowRoutes from './routes/workflowRoutes.js';
 import logRoutes from './routes/logRoutes.js';
 import driveTransferRoutes from './routes/driveTransferRoutes.js';
+import channelRoutes from './routes/channelRoutes.js';
 
 const app = express();
 
@@ -34,6 +35,7 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/workflows', workflowRoutes);
 app.use('/api/logs', logRoutes);
 app.use('/api/drive-transfer', driveTransferRoutes);
+app.use('/api/channels', channelRoutes);
 
 // Catch 404s
 app.use(notFoundHandler);

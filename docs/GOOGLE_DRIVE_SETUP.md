@@ -24,11 +24,9 @@ This guide walks through configuring official Google Drive API v3 to discover, i
    - **User support email**: Your Google email
    - **Developer contact information**: Your Google email
 4. Click **Save and Continue**.
-5. On the **Scopes** screen, click **Add or Remove Scopes** and select:
-   - `https://www.googleapis.com/auth/drive.readonly` (Allows read-only access to browse and stream your Drive videos safely)
-   - `https://www.googleapis.com/auth/drive.metadata.readonly` (Allows querying file metadata)
-   - `https://www.googleapis.com/auth/userinfo.profile` (For identifying connected account)
-   - *(Optional for YouTube upload)*: `https://www.googleapis.com/auth/youtube.upload`
+5. On the **Scopes** screen, keep YouTube and Drive apart:
+   - YouTube channel connect, including Brand Accounts, requests only `youtube.upload`, `youtube`, and `youtube.readonly`. Do not add Drive or userinfo scopes to that consent. Brand Accounts cannot grant them.
+   - Drive library and Drive Transfer use a separate sign-in. Its scopes are `https://www.googleapis.com/auth/drive` and `https://www.googleapis.com/auth/userinfo.email`. See `docs/DRIVE_TRANSFER.md`.
 6. On the **Test users** screen, add your personal or workspace Google Account email.
 7. Click **Save and Continue**.
 

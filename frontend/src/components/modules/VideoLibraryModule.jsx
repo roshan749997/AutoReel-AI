@@ -18,6 +18,7 @@ import {
   CheckCircle2,
   XCircle,
   Folder,
+  Folders,
   Pause,
   Play,
   RotateCcw,
@@ -53,7 +54,10 @@ import { Badge } from '../common/Badge.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
 import { Modal } from '../common/Modal.jsx';
 import { api } from '../../api/client.js';
-import { FolderTree, videoFolderLabel } from './FolderTree.jsx';
+import { driveTransferApi } from '../../api/driveTransferClient.js';
+import { FolderTree, FolderBoxes, videoFolderLabel } from './FolderTree.jsx';
+import { ChannelAvatar } from '../common/ChannelAvatar.jsx';
+import { accountIdsOfPair, findPairForFolder } from '../../utils/channelPairs.js';
 
 export function extractDriveFolderId(input) {
   if (!input || typeof input !== 'string') return '';
@@ -84,7 +88,7 @@ export const VideoThumbnail = ({ video, onPreview }) => {
   return (
     <div
       onClick={onPreview}
-      className="group/thumb relative w-16 h-20 sm:w-20 sm:h-24 rounded-lg overflow-hidden bg-slate-900 border border-slate-800 shrink-0 flex items-center justify-center cursor-pointer hover:border-indigo-500/60 transition-colors shadow-xs select-none"
+      className="group/thumb relative w-16 h-20 sm:w-20 sm:h-24 rounded-lg overflow-hidden bg-white border border-slate-200 shrink-0 flex items-center justify-center cursor-pointer hover:border-indigo-500/60 transition-colors shadow-xs select-none"
       title="Click to preview video"
     >
       {!imgError ? (
@@ -103,18 +107,18 @@ export const VideoThumbnail = ({ video, onPreview }) => {
           loading="lazy"
         />
       ) : (
-        <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 to-indigo-950/40 text-slate-500 group-hover/thumb:text-indigo-400 transition-colors">
+        <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-white to-indigo-50/40 text-slate-500 group-hover/thumb:text-indigo-400 transition-colors">
           <Film className="w-6 h-6" />
         </div>
       )}
 
       {/* Hover Play Button Overlay */}
-      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center transition-opacity">
+      <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center transition-opacity">
         <PlayCircle className="w-7 h-7 text-white drop-shadow-md" />
       </div>
 
       {/* Overlaid Duration Badge */}
-      <span className="absolute bottom-1 right-1 bg-black/85 backdrop-blur-xs text-white text-[9px] font-mono px-1 py-0.5 rounded leading-none">
+      <span className="absolute bottom-1 right-1 bg-slate-900/80 backdrop-blur-xs text-white text-[9px] font-mono px-1 py-0.5 rounded leading-none">
         {formatDuration(video.duration)}
       </span>
 
@@ -137,6 +141,7 @@ export const VideoLibraryModule = ({
   accounts = [],
   onQueuePost,
   onReload,
+  onNavigate,
 }) => {
   // Search, Filter & Understandable Sorting state
   const [searchQuery, setSearchQuery] = useState('');
@@ -150,12 +155,15 @@ export const VideoLibraryModule = ({
     if (focus) sessionStorage.removeItem('library-folder-focus');
     return focus;
   });
+  const [showAllVideos, setShowAllVideos] = useState(false);
   const [sortOption, setSortOption] = useState('modified_desc');
 
   // Google Drive Accounts & Folders state
   const [selectedDriveAccount, setSelectedDriveAccount] = useState('all');
+  const [driveLink, setDriveLink] = useState(null);
   const [foldersList, setFoldersList] = useState([]);
   const [folderTree, setFolderTree] = useState([]);
+  const [channelPairs, setChannelPairs] = useState([]);
   const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
   const [isRemovingDriveId, setIsRemovingDriveId] = useState(null);
 
@@ -196,6 +204,7 @@ export const VideoLibraryModule = ({
 
   // Multi-Selection State for Bulk AI
   const [selectedVideoIds, setSelectedVideoIds] = useState([]);
+  const [isSelectingAll, setIsSelectingAll] = useState(false);
   const [bulkLanguage, setBulkLanguage] = useState('en');
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkProgress, setBulkProgress] = useState(null);
@@ -258,7 +267,7 @@ export const VideoLibraryModule = ({
       const accId = targetAccountId !== null ? targetAccountId : selectedDriveAccount;
       const accountFilter = accId && accId !== 'all' ? { accountId: accId } : {};
 
-      const [driveRes, progressRes, aiRes, bulkRes, foldersRes, treeRes, statsRes] = await Promise.all([
+      const [driveRes, progressRes, aiRes, bulkRes, foldersRes, treeRes, statsRes, driveLinkRes, pairsRes] = await Promise.all([
         api.getDriveStatus().catch(() => ({ data: { connected: false } })),
         api.getSyncProgress().catch(() => ({ data: null })),
         api.getAiStatus().catch(() => ({ data: null })),
@@ -266,9 +275,12 @@ export const VideoLibraryModule = ({
         api.getVideoFoldersSummary(accountFilter).catch(() => ({ data: [] })),
         api.getVideoFolderTree().catch(() => ({ data: [] })),
         api.getVideoStats(accountFilter).catch(() => ({ data: null })),
+        driveTransferApi.getStatus().catch(() => ({ data: { connected: false } })),
+        api.getChannelPairs().catch(() => ({ data: [] })),
       ]);
 
       setDriveStatus(driveRes.data);
+      setDriveLink(driveLinkRes.data);
       if (driveRes.data?.defaultFolderId && !folderIdInput) {
         setFolderIdInput(driveRes.data.defaultFolderId);
       }
@@ -284,6 +296,9 @@ export const VideoLibraryModule = ({
       if (statsRes?.data) {
         setLibraryStats(statsRes.data);
       }
+      if (Array.isArray(pairsRes?.data)) {
+        setChannelPairs(pairsRes.data);
+      }
     } catch (err) {
       console.error('[VideoLibraryModule] Error checking status:', err);
     }
@@ -292,6 +307,20 @@ export const VideoLibraryModule = ({
   useEffect(() => {
     checkInitialStatus();
   }, [checkInitialStatus]);
+
+  const linkedAccountIdsFor = (video) => {
+    const pair = findPairForFolder(
+      channelPairs,
+      video?.folderId || selectedFolder,
+      video?.folderPathIds
+    );
+    const linked = accountIdsOfPair(pair).filter((id) =>
+      accounts.some((account) => String(account._id) === String(id) && account.status === 'connected')
+    );
+    if (linked.length > 0) return linked;
+    const connected = accounts.filter((account) => account.status === 'connected');
+    return connected.length <= 2 ? connected.map((account) => account._id) : [];
+  };
 
   useEffect(() => {
     if (!selectedFolder) return undefined;
@@ -303,11 +332,12 @@ export const VideoLibraryModule = ({
   const handleConnectGoogleDrive = async () => {
     try {
       setIsConnectingGoogle(true);
-      const res = await api.getGoogleAuthUrl();
-      if (res?.authUrl) {
-        window.location.href = res.authUrl;
+      const res = await driveTransferApi.getAuthUrl();
+      const authUrl = res?.data?.authUrl;
+      if (authUrl) {
+        window.location.href = authUrl;
       } else {
-        alert('Could not retrieve Google authorization URL. Please check backend configuration.');
+        alert('Could not retrieve the Drive authorization URL. Connect Drive from the Drive Transfer page.');
       }
     } catch (err) {
       alert(`Failed to start Google Drive connection: ${err.message}`);
@@ -316,30 +346,16 @@ export const VideoLibraryModule = ({
     }
   };
 
-  // Remove / Disconnect a Google Drive account
-  const handleRemoveGoogleDrive = async (e, acc) => {
-    e.stopPropagation();
-    const driveName = acc.accountName || acc.googleEmail || 'Google Drive';
-    const confirm = window.confirm(
-      `Are you sure you want to remove and disconnect Google Drive "${driveName}"?\n\nThis will remove this drive and all associated video catalog items.`
-    );
-    if (!confirm) return;
-
+  const handleDisconnectDrive = async () => {
+    const confirmed = window.confirm('Disconnect Google Drive? YouTube and Instagram accounts stay connected. Videos already in the library stay.');
+    if (!confirmed) return;
     try {
-      setIsRemovingDriveId(acc._id);
-      try {
-        await api.deleteAccount(acc._id);
-      } catch {
-        await api.disconnectAccount(acc._id);
-      }
-      if (selectedDriveAccount === acc._id) {
-        setSelectedDriveAccount('all');
-        handleFilterUpdate({ accountId: '' });
-      }
+      setIsRemovingDriveId('drive');
+      await driveTransferApi.disconnect();
+      setDriveLink((current) => ({ ...(current || {}), connected: false, email: null }));
       await checkInitialStatus('all');
-      if (onReload) onReload();
     } catch (err) {
-      alert(`Failed to remove Google Drive: ${err.message}`);
+      alert(`Failed to disconnect Google Drive: ${err.message}`);
     } finally {
       setIsRemovingDriveId(null);
     }
@@ -485,19 +501,56 @@ export const VideoLibraryModule = ({
 
   // Multi-select toggle
   const toggleSelectVideo = (id) => {
+    const videoId = String(id);
     setSelectedVideoIds((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+      prev.includes(videoId) ? prev.filter((item) => item !== videoId) : [...prev, videoId]
     );
   };
 
-  const toggleSelectAllPage = () => {
-    const pageIds = videos.map((v) => v._id);
-    const allSelected = pageIds.every((id) => selectedVideoIds.includes(id));
-    if (allSelected) {
-      setSelectedVideoIds((prev) => prev.filter((id) => !pageIds.includes(id)));
-    } else {
-      setSelectedVideoIds((prev) => Array.from(new Set([...prev, ...pageIds])));
+  const catalogQueryParams = () => {
+    const params = {
+      search: searchQuery || '',
+      status: statusFilter || '',
+      isVertical: aspectFilter || '',
+      approvalStatus: approvalFilter || '',
+      folderId: selectedFolder || '',
+      sort: sortOption || '',
+      accountId: selectedDriveAccount === 'all' ? '' : selectedDriveAccount,
+    };
+    if (sizeFilter === 'small') {
+      params.maxSize = 25 * 1024 * 1024;
+    } else if (sizeFilter === 'medium') {
+      params.minSize = 25 * 1024 * 1024;
+      params.maxSize = 100 * 1024 * 1024;
+    } else if (sizeFilter === 'large') {
+      params.minSize = 100 * 1024 * 1024;
     }
+    return params;
+  };
+
+  const selectAllMatching = async () => {
+    const total = pagination?.total || 0;
+    if (total > 0 && selectedVideoIds.length >= total) {
+      setSelectedVideoIds([]);
+      return;
+    }
+    if (total > 50) {
+      const label = selectedFolder ? 'in this folder' : 'matching the current filters';
+      if (!window.confirm(`Select all ${total.toLocaleString()} videos ${label}?`)) return;
+    }
+    try {
+      setIsSelectingAll(true);
+      const res = await api.getVideoIds(catalogQueryParams());
+      setSelectedVideoIds((res.data || []).map(String));
+    } catch (err) {
+      alert(`Could not select all videos: ${err.message}`);
+    } finally {
+      setIsSelectingAll(false);
+    }
+  };
+
+  const toggleSelectAllPage = () => {
+    selectAllMatching();
   };
 
   // Save Google Gemini API Key and test connection
@@ -706,8 +759,7 @@ export const VideoLibraryModule = ({
     tomorrow.setDate(tomorrow.getDate() + 1);
     tomorrow.setHours(18, 0, 0, 0);
 
-    const activeAccounts = accounts.filter((a) => a.status === 'connected');
-    const defaultIds = activeAccounts.length > 0 ? [activeAccounts[0]._id] : (accounts[0]?._id ? [accounts[0]._id] : []);
+    const defaultIds = linkedAccountIdsFor(effectiveVideo);
 
     setScheduleForm({
       selectedAccountIds: defaultIds,
@@ -794,13 +846,21 @@ export const VideoLibraryModule = ({
   };
 
   // Open Multi-Video Batch Schedule Modal
-  const openBatchScheduleModal = () => {
+  const openBatchScheduleModal = async () => {
     if (selectedVideoIds.length === 0) return;
-    const selectedObjs = videos.filter((v) => selectedVideoIds.includes(v._id));
+    let selectedObjs = videos.filter((v) => selectedVideoIds.includes(String(v._id)) || selectedVideoIds.includes(v._id));
+    if (selectedObjs.length < selectedVideoIds.length) {
+      try {
+        const res = await api.getVideosByIds(selectedVideoIds);
+        selectedObjs = res.data || [];
+      } catch (err) {
+        alert(`Could not load selected videos: ${err.message}`);
+        return;
+      }
+    }
     if (selectedObjs.length === 0) return;
 
-    const connectedAccounts = accounts.filter((a) => a.status === 'connected');
-    const defaultAccountIds = connectedAccounts.map((a) => a._id);
+    const defaultAccountIds = linkedAccountIdsFor(selectedObjs[0]);
 
     // Default start time: today + 1 hour rounded to nearest 15 mins
     const start = new Date(Date.now() + 60 * 60 * 1000);
@@ -826,6 +886,7 @@ export const VideoLibraryModule = ({
         scheduledAt: itemLocal,
         allowDuplicate: false,
         isExpanded: false,
+        isCustomizingChannels: false,
       };
     });
 
@@ -869,6 +930,14 @@ export const VideoLibraryModule = ({
     );
   };
 
+  const toggleGlobalAccount = (accountId) => {
+    const current = globalBatchConfig.selectedAccountIds || [];
+    const next = current.includes(accountId)
+      ? current.filter((id) => id !== accountId)
+      : [...current, accountId];
+    applyGlobalAccountsToAll(next);
+  };
+
   const toggleItemAccount = (index, accountId) => {
     setBatchScheduleItems((prev) => {
       const next = [...prev];
@@ -898,15 +967,21 @@ export const VideoLibraryModule = ({
     setBatchScheduleItems((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const selectAllApproved = () => {
-    const approvedIds = videos
-      .filter((v) => v.aiMetadata?.approvalStatus === 'approved')
-      .map((v) => v._id);
-    if (approvedIds.length === 0) {
-      alert('No approved videos found on this page. Generate AI metadata or approve drafts first.');
-      return;
+  const selectAllApproved = async () => {
+    try {
+      setIsSelectingAll(true);
+      const res = await api.getVideoIds({ ...catalogQueryParams(), approvalStatus: 'approved' });
+      const approvedIds = (res.data || []).map(String);
+      if (approvedIds.length === 0) {
+        alert('No approved videos found. Generate AI metadata or approve drafts first.');
+        return;
+      }
+      setSelectedVideoIds(approvedIds);
+    } catch (err) {
+      alert(`Could not select approved videos: ${err.message}`);
+    } finally {
+      setIsSelectingAll(false);
     }
-    setSelectedVideoIds(approvedIds);
   };
 
   const handleSubmitBatchSchedule = async (e) => {
@@ -983,7 +1058,23 @@ export const VideoLibraryModule = ({
       if (onReload) onReload();
       if (onQueuePost) onQueuePost();
     } catch (err) {
-      alert(`Batch Schedule Failed: ${err.message}`);
+      const errors = err.errors || err.data?.data?.errors || [];
+      const duplicateError = errors.find((e) => e.error?.includes('already scheduled'));
+      if (duplicateError) {
+        alert(
+          `Notice: These videos are ALREADY scheduled in your Publishing Queue!\n\n` +
+          `• ${duplicateError.error}\n\n` +
+          `Open the "Publishing Queue" tab in the left sidebar to view all scheduled posts across your calendar.`
+        );
+        setBatchScheduleModalOpen(false);
+        setSelectedVideoIds([]);
+        if (onReload) onReload();
+      } else {
+        const errorSummary = errors.length > 0
+          ? `\n\nDetails:\n` + errors.slice(0, 4).map((e) => `• ${e.error}`).join('\n')
+          : '';
+        alert(`Batch Schedule Notice: ${err.message}${errorSummary}`);
+      }
     } finally {
       setIsSubmittingBatchSchedule(false);
     }
@@ -1006,14 +1097,17 @@ export const VideoLibraryModule = ({
     ? Math.round((currentBulkJob.processedVideos / currentBulkJob.totalVideos) * 100)
     : 0;
 
-  const allPageIds = videos.map((v) => v._id);
-  const isAllPageSelected = videos.length > 0 && allPageIds.every((id) => selectedVideoIds.includes(id));
-  const googleAccounts = (accounts || []).filter((a) => a.platform === 'youtube' && !a.isDemo);
+  const catalogTotal = pagination?.total || 0;
+  const isAllMatchingSelected = catalogTotal > 0 && selectedVideoIds.length >= catalogTotal;
+  const isAllPageSelected = isAllMatchingSelected || (
+    videos.length > 0 && videos.every((video) => selectedVideoIds.includes(String(video._id)))
+  );
+  const driveConnected = Boolean(driveLink?.connected);
 
   return (
     <div className="space-y-6">
       {/* 1. Google Drive Multi-Account & Folder Management */}
-      <Card className="border-indigo-500/20 bg-gradient-to-r from-slate-900/90 via-indigo-950/20 to-slate-900/90 shadow-sm">
+      <Card className="border-indigo-500/20 bg-gradient-to-r from-white/90 via-indigo-50/20 to-white/90 shadow-sm">
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
@@ -1022,13 +1116,13 @@ export const VideoLibraryModule = ({
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-semibold text-slate-100">Connected Google Drives</h3>
-                  <Badge variant={googleAccounts.length > 0 ? 'success' : 'warning'} dot className="text-[10px]">
-                    {googleAccounts.length > 0 ? `${googleAccounts.length} Drive${googleAccounts.length > 1 ? 's' : ''} Connected` : 'No Drive Connected'}
+                  <h3 className="text-sm font-semibold text-slate-900">Google Drive</h3>
+                  <Badge variant={driveConnected ? 'success' : 'warning'} dot className="text-[10px]">
+                    {driveConnected ? 'Drive connected' : 'Drive not connected'}
                   </Badge>
                 </div>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Connect separate Google Drive accounts to catalog, organize, and publish video reels independently.
+                  Drive sign-in is separate from Social Accounts. YouTube and Instagram are not used to read Drive.
                 </p>
               </div>
             </div>
@@ -1042,7 +1136,7 @@ export const VideoLibraryModule = ({
                 onClick={handleConnectGoogleDrive}
                 className="text-xs bg-indigo-600 hover:bg-indigo-500 shadow-sm font-medium"
               >
-                + Connect Another Google Drive
+                Connect Drive
               </Button>
 
               <Button
@@ -1057,86 +1151,20 @@ export const VideoLibraryModule = ({
             </div>
           </div>
 
-          {/* Drive Accounts: Displayed separately */}
-          {googleAccounts.length > 0 ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
-              {googleAccounts.map((acc) => {
-                const isSelected = selectedDriveAccount === acc._id;
-                const hasDriveScope = acc.scopes?.some((s) => s.includes('drive'));
-                return (
-                  <div
-                    key={acc._id}
-                    onClick={() => {
-                      const next = isSelected ? 'all' : acc._id;
-                      setSelectedDriveAccount(next);
-                      handleFilterUpdate({ accountId: next === 'all' ? '' : next });
-                    }}
-                    className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
-                      isSelected
-                        ? 'bg-indigo-950/50 border-indigo-500/70 ring-1 ring-indigo-500/40 shadow-sm'
-                        : 'bg-slate-950/60 border-slate-800/80 hover:border-slate-700/80'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3 min-w-0 flex-1">
-                      {acc.profilePictureUrl ? (
-                        <img
-                          src={acc.profilePictureUrl}
-                          alt={acc.accountName}
-                          className="w-9 h-9 rounded-full object-cover border border-slate-700 shrink-0"
-                        />
-                      ) : (
-                        <div className="w-9 h-9 rounded-full bg-indigo-900/50 border border-indigo-700/50 flex items-center justify-center text-xs font-semibold text-indigo-300 shrink-0">
-                          {acc.accountName?.charAt(0)?.toUpperCase() || 'G'}
-                        </div>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-semibold text-slate-100 truncate block">
-                            {acc.accountName}
-                          </span>
-                        </div>
-                        <span className="text-[11px] text-slate-400 truncate block font-mono">
-                          {acc.googleEmail || 'Google Drive Connected'}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="shrink-0 flex items-center gap-2">
-                      <div className="flex flex-col items-end gap-1">
-                        <span
-                          className={`w-2.5 h-2.5 rounded-full ${
-                            acc.status === 'connected' ? 'bg-emerald-400 shadow-xs shadow-emerald-500/50' : 'bg-amber-400'
-                          }`}
-                          title={acc.status === 'connected' ? 'Account Active & Connected' : 'Authorization Needed'}
-                        />
-                        <span className="text-[9px] text-slate-500 font-mono">
-                          {hasDriveScope ? 'Drive Read' : 'OAuth'}
-                        </span>
-                      </div>
-
-                      {/* Remove / Disconnect Drive button */}
-                      <button
-                        type="button"
-                        disabled={isRemovingDriveId === acc._id}
-                        onClick={(e) => handleRemoveGoogleDrive(e, acc)}
-                        className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-950/50 border border-transparent hover:border-rose-800/40 transition-colors ml-1"
-                        title={`Remove / Disconnect Google Drive (${acc.accountName})`}
-                      >
-                        {isRemovingDriveId === acc._id ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-400" />
-                        ) : (
-                          <Trash2 className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+          {driveConnected ? (
+            <div className="p-3 rounded-xl border border-slate-200 bg-slate-50/60 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold text-slate-900">Drive sign-in</p>
+                <p className="text-[11px] text-slate-400">{driveLink.email || 'Connected Google Drive account'}</p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={handleDisconnectDrive} isLoading={isRemovingDriveId === 'drive'}>
+                Disconnect Drive
+              </Button>
             </div>
           ) : (
-            <div className="p-4 rounded-xl bg-slate-950/40 border border-dashed border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="p-4 rounded-xl bg-slate-50/40 border border-dashed border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
               <div className="text-xs text-slate-400 text-center sm:text-left">
-                No Google Drive connected yet. Connect your Google account to discover and index video reels automatically.
+                Drive is not connected. Connect the Google account that owns the folders. Do not use the YouTube Brand Account for Drive.
               </div>
               <Button
                 variant="primary"
@@ -1146,65 +1174,36 @@ export const VideoLibraryModule = ({
                 onClick={handleConnectGoogleDrive}
                 className="text-xs"
               >
-                Connect Google Drive Now
+                Connect Drive
               </Button>
             </div>
           )}
 
           {(folderTree.length > 0 || foldersList.length > 0) && (
-            <div className="pt-2 border-t border-slate-800/60 space-y-2">
-              <span className="text-[11px] text-slate-400 font-medium flex items-center gap-1">
-                <Folder className="w-3.5 h-3.5 text-indigo-400" />
-                Drive folders and subfolders
-              </span>
-              {folderTree.length > 0 ? (
-                <FolderTree
-                  nodes={folderTree}
-                  selectedId={selectedFolder}
-                  onSelect={(folderId) => {
-                    setSelectedFolder(folderId);
-                    handleFilterUpdate({ folderId, status: folderId ? 'all' : statusFilter });
-                  }}
-                />
-              ) : (
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <button
-                    onClick={() => {
-                      setSelectedFolder('');
-                      handleFilterUpdate({ folderId: '' });
-                    }}
-                    className={`px-2.5 py-1 rounded-lg text-xs transition-colors ${
-                      !selectedFolder
-                        ? 'bg-indigo-600 text-white font-medium shadow-xs'
-                        : 'bg-slate-950 text-slate-300 border border-slate-800 hover:border-slate-700'
-                    }`}
-                  >
-                    All Folders
-                  </button>
-                  {foldersList.map((f) => {
-                    const label = f.folderPathNames?.length ? f.folderPathNames.join(' / ') : f.folderName || 'Unnamed Folder';
-                    const isActive = selectedFolder === f._id;
-                    return (
-                      <button
-                        key={f._id}
-                        onClick={() => {
-                          const next = isActive ? '' : f._id;
-                          setSelectedFolder(next);
-                          handleFilterUpdate({ folderId: next });
-                        }}
-                        className={`px-2.5 py-1 rounded-lg text-xs transition-colors flex items-center gap-1.5 ${
-                          isActive
-                            ? 'bg-indigo-600 text-white font-medium shadow-xs'
-                            : 'bg-slate-950 text-slate-300 border border-slate-800 hover:border-slate-700'
-                        }`}
-                      >
-                        <span>{label}</span>
-                        <span className="text-[10px] opacity-70">({f.count})</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+            <div className="pt-2 border-t border-slate-200/60 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-slate-500 font-medium flex items-center gap-1.5">
+                  <Folder className="w-3.5 h-3.5 text-amber-500" />
+                  Drive Folders & Subfolders
+                </span>
+              </div>
+              <FolderBoxes
+                nodes={folderTree}
+                foldersList={foldersList}
+                selectedId={selectedFolder}
+                showAllActive={showAllVideos}
+                totalVideosCount={libraryStats?.total || pagination?.total || 0}
+                onSelect={(folderId) => {
+                  setShowAllVideos(false);
+                  setSelectedFolder(folderId);
+                  handleFilterUpdate({ folderId, status: folderId ? 'all' : statusFilter });
+                }}
+                onShowAll={() => {
+                  setShowAllVideos(true);
+                  setSelectedFolder('');
+                  handleFilterUpdate({ folderId: '', status: statusFilter });
+                }}
+              />
             </div>
           )}
         </div>
@@ -1212,11 +1211,11 @@ export const VideoLibraryModule = ({
 
       {/* Expandable Drive Folder Configuration Panel */}
       {syncConfigOpen && (
-        <Card className="border-indigo-500/30 bg-slate-900/90 animate-in fade-in duration-150">
+        <Card className="border-indigo-500/30 bg-white/90 animate-in fade-in duration-150">
           <div className="space-y-4 text-xs">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div className="md:col-span-2 space-y-1">
-                <label className="text-slate-300 font-medium block">
+                <label className="text-slate-700 font-medium block">
                   Target Google Drive Folder ID (Containing 20k+ Videos):
                 </label>
                 <div className="flex items-center gap-2">
@@ -1228,7 +1227,7 @@ export const VideoLibraryModule = ({
                       setFolderIdInput(e.target.value);
                       setFolderValidation(null);
                     }}
-                    className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500/60 font-mono text-xs"
+                    className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 placeholder-slate-500 focus:outline-none focus:border-indigo-500/60 font-mono text-xs"
                   />
                   <Button
                     variant="secondary"
@@ -1243,14 +1242,14 @@ export const VideoLibraryModule = ({
               </div>
 
               <div className="space-y-1">
-                <label className="text-slate-300 font-medium block">Scope:</label>
+                <label className="text-slate-700 font-medium block">Scope:</label>
                 <div className="flex items-center gap-3 pt-2 text-slate-400">
                   <label className="flex items-center gap-1.5 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={syncOptions.recursive}
                       onChange={(e) => setSyncOptions({ ...syncOptions, recursive: e.target.checked })}
-                      className="rounded bg-slate-950 border-slate-700 text-indigo-600 focus:ring-0"
+                      className="rounded bg-slate-50 border-slate-300 text-indigo-600 focus:ring-0"
                     />
                     Include Subfolders
                   </label>
@@ -1262,8 +1261,8 @@ export const VideoLibraryModule = ({
               <div
                 className={`p-3 rounded-lg border text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
                   folderValidation.success
-                    ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-300'
-                    : 'bg-rose-950/20 border-rose-500/30 text-rose-300'
+                    ? 'bg-emerald-50/20 border-emerald-500/30 text-emerald-700'
+                    : 'bg-rose-50/20 border-rose-500/30 text-rose-700'
                 }`}
               >
                 <div className="flex items-start gap-2.5">
@@ -1285,7 +1284,7 @@ export const VideoLibraryModule = ({
                           size="sm"
                           icon={RefreshCw}
                           onClick={handleConnectGoogleDrive}
-                          className="text-xs text-amber-300 border-amber-500/30"
+                          className="text-xs text-amber-800 border-amber-500/30"
                         >
                           Reconnect Google Account with Drive Scopes
                         </Button>
@@ -1295,7 +1294,7 @@ export const VideoLibraryModule = ({
                 </div>
                 <button
                   onClick={() => setFolderValidation(null)}
-                  className="text-slate-400 hover:text-slate-200 self-start sm:self-center"
+                  className="text-slate-400 hover:text-slate-800 self-start sm:self-center"
                 >
                   &times;
                 </button>
@@ -1336,12 +1335,12 @@ export const VideoLibraryModule = ({
 
       {/* 2. Drive Sync Progress Banner (Visible during sync) */}
       {currentJob && isJobRunning && (
-        <Card className="border-indigo-500/30 bg-slate-900/90">
+        <Card className="border-indigo-500/30 bg-white/90">
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping" />
-                <h4 className="text-xs font-semibold text-slate-200">
+                <h4 className="text-xs font-semibold text-slate-800">
                   Indexing Drive: {currentJob.folderName || 'Google Drive'}
                 </h4>
                 <Badge variant="info" className="text-[10px] capitalize">
@@ -1360,10 +1359,10 @@ export const VideoLibraryModule = ({
               </Button>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950/60 p-3 rounded-lg border border-slate-800 text-[11px]">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50/60 p-3 rounded-lg border border-slate-200 text-[11px]">
               <div>
                 <span className="text-slate-500 block">Total Scanned:</span>
-                <span className="font-semibold text-slate-200 text-sm">{currentJob.totalScanned || 0}</span>
+                <span className="font-semibold text-slate-800 text-sm">{currentJob.totalScanned || 0}</span>
               </div>
               <div>
                 <span className="text-slate-500 block">Newly Indexed:</span>
@@ -1375,7 +1374,7 @@ export const VideoLibraryModule = ({
               </div>
               <div>
                 <span className="text-slate-500 block">Pages Scanned:</span>
-                <span className="font-semibold text-slate-300 text-sm">{currentJob.pagesProcessed || 0}</span>
+                <span className="font-semibold text-slate-700 text-sm">{currentJob.pagesProcessed || 0}</span>
               </div>
             </div>
           </div>
@@ -1394,15 +1393,15 @@ export const VideoLibraryModule = ({
           }}
           className={`p-3 rounded-xl border text-left transition-all ${
             !approvalFilter && !statusFilter && !aspectFilter
-              ? 'bg-indigo-950/40 border-indigo-500/70 shadow-sm ring-1 ring-indigo-500/40'
-              : 'bg-slate-900/50 border-slate-800/80 hover:border-slate-700'
+              ? 'bg-indigo-50/40 border-indigo-500/70 shadow-sm ring-1 ring-indigo-500/40'
+              : 'bg-white/50 border-slate-200/80 hover:border-slate-300'
           }`}
         >
           <div className="flex items-center justify-between text-slate-400 text-xs">
             <span>Total Catalog</span>
             <Film className="w-3.5 h-3.5 text-indigo-400" />
           </div>
-          <div className="text-lg font-bold text-slate-100 mt-1">
+          <div className="text-lg font-bold text-slate-900 mt-1">
             {libraryStats ? libraryStats.total?.toLocaleString() : pagination?.total?.toLocaleString() || 0}
           </div>
           <span className="text-[10px] text-slate-500 block truncate">All drive indexed</span>
@@ -1417,15 +1416,15 @@ export const VideoLibraryModule = ({
           }}
           className={`p-3 rounded-xl border text-left transition-all ${
             approvalFilter === 'approved'
-              ? 'bg-emerald-950/40 border-emerald-500/70 shadow-sm ring-1 ring-emerald-500/40'
-              : 'bg-slate-900/50 border-slate-800/80 hover:border-slate-700'
+              ? 'bg-emerald-50/40 border-emerald-500/70 shadow-sm ring-1 ring-emerald-500/40'
+              : 'bg-white/50 border-slate-200/80 hover:border-slate-300'
           }`}
         >
           <div className="flex items-center justify-between text-emerald-400 text-xs">
             <span>Approved AI</span>
             <CheckCircle className="w-3.5 h-3.5" />
           </div>
-          <div className="text-lg font-bold text-emerald-300 mt-1">
+          <div className="text-lg font-bold text-emerald-700 mt-1">
             {libraryStats?.approved?.toLocaleString() ?? '—'}
           </div>
           <span className="text-[10px] text-emerald-400/70 block truncate">Ready to schedule</span>
@@ -1440,15 +1439,15 @@ export const VideoLibraryModule = ({
           }}
           className={`p-3 rounded-xl border text-left transition-all ${
             approvalFilter === 'draft'
-              ? 'bg-amber-950/40 border-amber-500/70 shadow-sm ring-1 ring-amber-500/40'
-              : 'bg-slate-900/50 border-slate-800/80 hover:border-slate-700'
+              ? 'bg-amber-50/40 border-amber-500/70 shadow-sm ring-1 ring-amber-500/40'
+              : 'bg-white/50 border-slate-200/80 hover:border-slate-300'
           }`}
         >
           <div className="flex items-center justify-between text-amber-400 text-xs">
             <span>Draft AI</span>
             <Clock className="w-3.5 h-3.5" />
           </div>
-          <div className="text-lg font-bold text-amber-300 mt-1">
+          <div className="text-lg font-bold text-amber-800 mt-1">
             {libraryStats?.draft?.toLocaleString() ?? '—'}
           </div>
           <span className="text-[10px] text-amber-400/70 block truncate">Needs quick review</span>
@@ -1463,8 +1462,8 @@ export const VideoLibraryModule = ({
           }}
           className={`p-3 rounded-xl border text-left transition-all ${
             approvalFilter === 'none'
-              ? 'bg-purple-950/40 border-purple-500/70 shadow-sm ring-1 ring-purple-500/40'
-              : 'bg-slate-900/50 border-slate-800/80 hover:border-slate-700'
+              ? 'bg-purple-50/40 border-purple-500/70 shadow-sm ring-1 ring-purple-500/40'
+              : 'bg-white/50 border-slate-200/80 hover:border-slate-300'
           }`}
         >
           <div className="flex items-center justify-between text-purple-400 text-xs">
@@ -1486,15 +1485,15 @@ export const VideoLibraryModule = ({
           }}
           className={`p-3 rounded-xl border text-left transition-all ${
             aspectFilter === 'true'
-              ? 'bg-indigo-950/40 border-indigo-500/70 shadow-sm ring-1 ring-indigo-500/40'
-              : 'bg-slate-900/50 border-slate-800/80 hover:border-slate-700'
+              ? 'bg-indigo-50/40 border-indigo-500/70 shadow-sm ring-1 ring-indigo-500/40'
+              : 'bg-white/50 border-slate-200/80 hover:border-slate-300'
           }`}
         >
           <div className="flex items-center justify-between text-indigo-400 text-xs">
             <span>9:16 Vertical</span>
             <Smartphone className="w-3.5 h-3.5" />
           </div>
-          <div className="text-lg font-bold text-indigo-300 mt-1">
+          <div className="text-lg font-bold text-indigo-700 mt-1">
             {libraryStats?.vertical?.toLocaleString() ?? '—'}
           </div>
           <span className="text-[10px] text-indigo-400/70 block truncate">Shorts & Reels</span>
@@ -1510,7 +1509,7 @@ export const VideoLibraryModule = ({
           className={`p-3 rounded-xl border text-left transition-all ${
             statusFilter === 'queued'
               ? 'bg-cyan-950/40 border-cyan-500/70 shadow-sm ring-1 ring-cyan-500/40'
-              : 'bg-slate-900/50 border-slate-800/80 hover:border-slate-700'
+              : 'bg-white/50 border-slate-200/80 hover:border-slate-300'
           }`}
         >
           <div className="flex items-center justify-between text-cyan-400 text-xs">
@@ -1536,7 +1535,7 @@ export const VideoLibraryModule = ({
                 placeholder="Search videos by title, original filename, or tags..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-10 pr-24 py-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500/60"
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-10 pr-24 py-2.5 text-xs text-slate-800 placeholder-slate-500 focus:outline-none focus:border-indigo-500/60"
               />
               <button
                 type="submit"
@@ -1558,7 +1557,7 @@ export const VideoLibraryModule = ({
                   setSortOption(e.target.value);
                   handleFilterUpdate({ sort: e.target.value });
                 }}
-                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500/60 cursor-pointer font-medium"
+                className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-indigo-500/60 cursor-pointer font-medium"
               >
                 <option value="modified_desc">🕒 Newest on Drive (Recently Added)</option>
                 <option value="modified_asc">⏳ Oldest on Drive</option>
@@ -1574,7 +1573,7 @@ export const VideoLibraryModule = ({
           </div>
 
           {/* Quick Filter Pills Row */}
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs border-t border-slate-800/60 mt-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs border-t border-slate-200/60 mt-2">
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-slate-500 text-[11px] font-medium mr-1 flex items-center gap-1">
                 <Filter className="w-3 h-3 text-slate-400" />
@@ -1587,12 +1586,14 @@ export const VideoLibraryModule = ({
                   setApprovalFilter('');
                   setStatusFilter('');
                   setAspectFilter('');
-                  handleFilterUpdate({ approvalStatus: '', status: '', isVertical: '' });
+                  setShowAllVideos(true);
+                  setSelectedFolder('');
+                  handleFilterUpdate({ approvalStatus: '', status: '', isVertical: '', folderId: '' });
                 }}
                 className={`px-2.5 py-1 rounded-md text-xs transition-colors ${
-                  !approvalFilter && !statusFilter && !aspectFilter
+                  showAllVideos && !approvalFilter && !statusFilter && !aspectFilter
                     ? 'bg-indigo-600 text-white font-medium'
-                    : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    : 'bg-white text-slate-600 hover:text-slate-800 border border-slate-200'
                 }`}
               >
                 All Videos
@@ -1608,7 +1609,7 @@ export const VideoLibraryModule = ({
                 className={`px-2.5 py-1 rounded-md text-xs transition-colors flex items-center gap-1 ${
                   approvalFilter === 'approved'
                     ? 'bg-emerald-600 text-white font-medium shadow-xs'
-                    : 'bg-slate-900 text-emerald-400/90 hover:text-emerald-300 border border-slate-800'
+                    : 'bg-white text-emerald-400/90 hover:text-emerald-700 border border-slate-200'
                 }`}
               >
                 <CheckCircle className="w-3 h-3" />
@@ -1625,7 +1626,7 @@ export const VideoLibraryModule = ({
                 className={`px-2.5 py-1 rounded-md text-xs transition-colors flex items-center gap-1 ${
                   approvalFilter === 'draft'
                     ? 'bg-amber-600 text-white font-medium shadow-xs'
-                    : 'bg-slate-900 text-amber-400/90 hover:text-amber-300 border border-slate-800'
+                    : 'bg-white text-amber-400/90 hover:text-amber-800 border border-slate-200'
                 }`}
               >
                 <Clock className="w-3 h-3" />
@@ -1642,7 +1643,7 @@ export const VideoLibraryModule = ({
                 className={`px-2.5 py-1 rounded-md text-xs transition-colors ${
                   approvalFilter === 'none'
                     ? 'bg-slate-700 text-white font-medium'
-                    : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    : 'bg-white text-slate-400 hover:text-slate-800 border border-slate-200'
                 }`}
               >
                 Needs AI
@@ -1658,7 +1659,7 @@ export const VideoLibraryModule = ({
                 className={`px-2.5 py-1 rounded-md text-xs transition-colors flex items-center gap-1 ${
                   aspectFilter === 'true'
                     ? 'bg-indigo-600 text-white font-medium shadow-xs'
-                    : 'bg-slate-900 text-slate-300 hover:text-white border border-slate-800'
+                    : 'bg-white text-slate-700 hover:text-slate-900 border border-slate-200'
                 }`}
               >
                 <Smartphone className="w-3 h-3" />
@@ -1675,7 +1676,7 @@ export const VideoLibraryModule = ({
                 className={`px-2.5 py-1 rounded-md text-xs transition-colors flex items-center gap-1 ${
                   aspectFilter === 'false'
                     ? 'bg-indigo-600 text-white font-medium shadow-xs'
-                    : 'bg-slate-900 text-slate-300 hover:text-white border border-slate-800'
+                    : 'bg-white text-slate-700 hover:text-slate-900 border border-slate-200'
                 }`}
               >
                 <Monitor className="w-3 h-3" />
@@ -1691,7 +1692,7 @@ export const VideoLibraryModule = ({
                   setStatusFilter(e.target.value);
                   handleFilterUpdate({ status: e.target.value });
                 }}
-                className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-300 focus:outline-none text-xs"
+                className="bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none text-xs"
               >
                 <option value="">Status: Available (Hide Queued)</option>
                 <option value="discovered">Discovered</option>
@@ -1706,7 +1707,7 @@ export const VideoLibraryModule = ({
                   setSizeFilter(e.target.value);
                   handleFilterUpdate({ sizeFilter: e.target.value });
                 }}
-                className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-300 focus:outline-none text-xs"
+                className="bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none text-xs"
               >
                 <option value="">Size: All</option>
                 <option value="small">&lt; 25 MB</option>
@@ -1733,7 +1734,7 @@ export const VideoLibraryModule = ({
                       sort: 'modified_desc',
                     });
                   }}
-                  className="text-indigo-400 hover:text-indigo-300 text-xs px-2 py-1 transition-colors underline"
+                  className="text-indigo-400 hover:text-indigo-700 text-xs px-2 py-1 transition-colors underline"
                 >
                   Reset All
                 </button>
@@ -1745,20 +1746,20 @@ export const VideoLibraryModule = ({
 
       {/* 4. Floating / Sticky Bulk Action Bar when items selected */}
       {selectedVideoIds.length > 0 && (
-        <div className="bg-indigo-950/80 border border-indigo-500/40 p-3 rounded-xl flex flex-wrap items-center justify-between gap-3 shadow-lg backdrop-blur-sm animate-in fade-in duration-200">
+        <div className="bg-indigo-50/80 border border-indigo-500/40 p-3 rounded-xl flex flex-wrap items-center justify-between gap-3 shadow-lg backdrop-blur-sm animate-in fade-in duration-200">
           <div className="flex items-center gap-3 text-xs">
-            <span className="font-semibold text-indigo-200 flex items-center gap-1.5">
+            <span className="font-semibold text-indigo-800 flex items-center gap-1.5">
               <CheckSquare className="w-4 h-4 text-indigo-400" />
               {selectedVideoIds.length} video{selectedVideoIds.length > 1 ? 's' : ''} selected
             </span>
             <span className="text-slate-500">|</span>
-            <div className="flex items-center gap-1.5 text-slate-300">
+            <div className="flex items-center gap-1.5 text-slate-700">
               <Globe className="w-3.5 h-3.5 text-slate-400" />
               <span>Language:</span>
               <select
                 value={bulkLanguage}
                 onChange={(e) => setBulkLanguage(e.target.value)}
-                className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200 focus:outline-none text-xs"
+                className="bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-800 focus:outline-none text-xs"
               >
                 <option value="en">English</option>
                 <option value="hi">हिंदी (Hindi)</option>
@@ -1772,7 +1773,7 @@ export const VideoLibraryModule = ({
               variant="ghost"
               size="sm"
               onClick={() => setSelectedVideoIds([])}
-              className="text-xs text-slate-400 hover:text-slate-200 cursor-pointer"
+              className="text-xs text-slate-400 hover:text-slate-800 cursor-pointer"
             >
               Clear Selection
             </Button>
@@ -1782,7 +1783,7 @@ export const VideoLibraryModule = ({
               icon={RefreshCw}
               isLoading={isStartingBulk}
               onClick={() => handleStartBulkAi(true)}
-              className="text-xs bg-indigo-950/70 border-indigo-500/50 text-indigo-300 hover:bg-indigo-900/70 hover:text-indigo-100 shadow-sm flex items-center gap-1.5 cursor-pointer"
+              className="text-xs bg-indigo-50/70 border-indigo-500/50 text-indigo-700 hover:bg-indigo-900/70 hover:text-indigo-100 shadow-sm flex items-center gap-1.5 cursor-pointer"
               title="Regenerate fresh AI titles, viral hooks, captions, and hashtags for all selected videos"
             >
               Regenerate Content with AI ({selectedVideoIds.length})
@@ -1805,18 +1806,47 @@ export const VideoLibraryModule = ({
               onClick={openBatchScheduleModal}
               className="text-xs bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 shadow-md font-semibold text-white px-3.5 py-1.5 flex items-center gap-1.5 cursor-pointer"
             >
-              <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
+              <Zap className="w-3.5 h-3.5 text-amber-800 fill-amber-300" />
               Batch Schedule ({selectedVideoIds.length} Videos)
             </Button>
           </div>
         </div>
       )}
 
-      {/* 5. Line-by-Line Video List Catalog (No Box/Card Grid) */}
-      <Card>
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-4 border-b border-slate-800/80 mb-4">
+      {/* 5. Line-by-Line Video List Catalog or Folder Picker Prompt */}
+      {!selectedFolder && !showAllVideos && !searchQuery && !statusFilter && !aspectFilter && !approvalFilter && (folderTree.length > 0 || foldersList.length > 0) ? (
+        <Card className="text-center py-12 px-4 bg-slate-50/60 border-dashed border-slate-200">
+          <div className="max-w-md mx-auto space-y-3.5">
+            <div className="w-12 h-12 mx-auto rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center shadow-2xs">
+              <Folder className="w-6 h-6" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-sm font-semibold text-slate-800">Choose a Drive Folder</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Drive folders and subfolders are shown above as boxes. Click on any folder box to explore subfolders and view its videos.
+              </p>
+            </div>
+            <div className="pt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                icon={Globe}
+                onClick={() => {
+                  setShowAllVideos(true);
+                  handleFilterUpdate({ folderId: '', status: statusFilter });
+                }}
+                className="text-xs font-medium"
+              >
+                Browse All Videos ({libraryStats?.total?.toLocaleString() || pagination?.total?.toLocaleString() || 0})
+              </Button>
+            </div>
+          </div>
+        </Card>
+      ) : (
+        <Card>
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-4 border-b border-slate-200/80 mb-4">
           <div>
-            <h3 className="text-sm font-semibold text-slate-100">Video Library Catalog</h3>
+            <h3 className="text-sm font-semibold text-slate-900">Video Library Catalog</h3>
             <p className="text-xs text-slate-400 mt-0.5">
               Showing page {pagination?.page || 1} of {pagination?.totalPages || 1} (
               {pagination?.total?.toLocaleString() || 0} total videos on Drive)
@@ -1827,7 +1857,7 @@ export const VideoLibraryModule = ({
             <div className="flex items-center gap-2 text-xs flex-wrap">
               <button
                 onClick={selectAllApproved}
-                className="flex items-center gap-1.5 text-slate-300 hover:text-emerald-300 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-emerald-500/30 transition-colors cursor-pointer"
+                className="flex items-center gap-1.5 text-slate-700 hover:text-emerald-700 px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:border-emerald-500/30 transition-colors cursor-pointer"
                 title="Select all videos that have approved AI metadata"
               >
                 <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
@@ -1835,15 +1865,24 @@ export const VideoLibraryModule = ({
               </button>
 
               <button
-                onClick={toggleSelectAllPage}
-                className="flex items-center gap-1.5 text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 transition-colors cursor-pointer"
+                onClick={selectAllMatching}
+                disabled={isSelectingAll}
+                className="flex items-center gap-1.5 text-slate-700 hover:text-slate-900 px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:border-slate-300 transition-colors cursor-pointer disabled:opacity-60"
               >
-                {isAllPageSelected ? (
+                {isSelectingAll ? (
+                  <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin" />
+                ) : isAllMatchingSelected ? (
                   <CheckSquare className="w-3.5 h-3.5 text-indigo-400" />
                 ) : (
                   <Square className="w-3.5 h-3.5 text-slate-500" />
                 )}
-                <span>{isAllPageSelected ? 'Deselect Page' : 'Select All on Page'}</span>
+                <span>
+                  {isSelectingAll
+                    ? 'Selecting…'
+                    : isAllMatchingSelected
+                    ? 'Deselect All'
+                    : `Select All${catalogTotal ? ` (${catalogTotal.toLocaleString()})` : ''}`}
+                </span>
               </button>
 
               {currentBulkJob && (
@@ -1861,7 +1900,7 @@ export const VideoLibraryModule = ({
           )}
         </div>
 
-        {googleAccounts.length === 0 ? (
+        {videos.length === 0 && !driveConnected ? (
           <EmptyState
             icon={FolderSync}
             title="No Google Drive Connected"
@@ -1886,13 +1925,15 @@ export const VideoLibraryModule = ({
         ) : (
           <div className="space-y-2">
             {/* Desktop Column Header */}
-            <div className="hidden lg:flex items-center justify-between gap-4 px-4 py-2.5 text-[11px] font-semibold text-slate-400 bg-slate-900/50 rounded-lg border border-slate-800/80 uppercase tracking-wider">
+            <div className="hidden lg:flex items-center justify-between gap-4 px-4 py-2.5 text-[11px] font-semibold text-slate-400 bg-white/50 rounded-lg border border-slate-200/80 uppercase tracking-wider">
               <div className="flex-1 min-w-0 flex items-center gap-2">
                 <input
                   type="checkbox"
-                  checked={isAllPageSelected}
-                  onChange={toggleSelectAllPage}
-                  className="rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-0 cursor-pointer"
+                  checked={isAllMatchingSelected}
+                  disabled={isSelectingAll}
+                  onChange={selectAllMatching}
+                  className="rounded bg-white border-slate-300 text-indigo-600 focus:ring-0 cursor-pointer"
+                  title="Select all videos in this catalog view"
                 />
                 <span>Video & Information</span>
               </div>
@@ -1906,7 +1947,7 @@ export const VideoLibraryModule = ({
 
             {/* Line-by-Line Video Items */}
             {videos.map((video) => {
-              const isSelected = selectedVideoIds.includes(video._id);
+              const isSelected = selectedVideoIds.includes(String(video._id));
               const aiMeta = video.aiMetadata;
               const hasAi = Boolean(aiMeta?.youtubeTitle || aiMeta?.generatedTitle);
               const approvalStatus = aiMeta?.approvalStatus || (hasAi ? 'draft' : null);
@@ -1916,8 +1957,8 @@ export const VideoLibraryModule = ({
                   key={video._id}
                   className={`group p-3 sm:p-3.5 rounded-xl border transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-3 sm:gap-4 ${
                     isSelected
-                      ? 'bg-indigo-950/30 border-indigo-500/60 ring-1 ring-indigo-500/30'
-                      : 'bg-slate-950/60 border-slate-800/80 hover:bg-slate-900/60 hover:border-slate-700/80'
+                      ? 'bg-indigo-50/30 border-indigo-500/60 ring-1 ring-indigo-500/30'
+                      : 'bg-slate-50/60 border-slate-200/80 hover:bg-white/60 hover:border-slate-300/80'
                   }`}
                 >
                   {/* Left: Checkbox, Thumbnail, Title & Original filename */}
@@ -1926,7 +1967,7 @@ export const VideoLibraryModule = ({
                       type="checkbox"
                       checked={isSelected}
                       onChange={() => toggleSelectVideo(video._id)}
-                      className="mt-1 sm:mt-0 rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-0 cursor-pointer shrink-0"
+                      className="mt-1 sm:mt-0 rounded bg-white border-slate-300 text-indigo-600 focus:ring-0 cursor-pointer shrink-0"
                     />
 
                     {/* Video Thumbnail (Authenticated Proxy + Graceful Fallback) */}
@@ -1937,7 +1978,7 @@ export const VideoLibraryModule = ({
                       <div className="flex items-center gap-2">
                         <h4
                           onClick={() => setPreviewVideo(video)}
-                          className="text-xs sm:text-sm font-semibold text-slate-100 hover:text-indigo-300 transition-colors cursor-pointer truncate"
+                          className="text-xs sm:text-sm font-semibold text-slate-900 hover:text-indigo-700 transition-colors cursor-pointer truncate"
                           title="Click to preview video & details"
                         >
                           {video.cleanTitle || video.originalName}
@@ -1950,7 +1991,7 @@ export const VideoLibraryModule = ({
                         </span>
 
                         {videoFolderLabel(video) && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-400">
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white border border-slate-200 text-[10px] text-slate-400">
                             <Folder className="w-2.5 h-2.5 text-indigo-400" />
                             {videoFolderLabel(video)}
                           </span>
@@ -1959,7 +2000,7 @@ export const VideoLibraryModule = ({
 
                       {/* AI Snippet preview if available */}
                       {hasAi && (
-                        <p className="text-[11px] text-indigo-300/90 truncate flex items-center gap-1 font-medium">
+                        <p className="text-[11px] text-indigo-700/90 truncate flex items-center gap-1 font-medium">
                           <Sparkles className="w-3 h-3 text-indigo-400 shrink-0" />
                           <span>{aiMeta.youtubeTitle || aiMeta.generatedTitle}</span>
                         </p>
@@ -1968,10 +2009,10 @@ export const VideoLibraryModule = ({
                   </div>
 
                   {/* Right Section: Technical Specs, AI Status, Publishing Status & Actions */}
-                  <div className="w-full lg:w-auto flex flex-wrap lg:flex-nowrap items-center justify-between lg:justify-end gap-3 sm:gap-4 pt-2.5 lg:pt-0 border-t border-slate-800/50 lg:border-t-0 shrink-0">
+                  <div className="w-full lg:w-auto flex flex-wrap lg:flex-nowrap items-center justify-between lg:justify-end gap-3 sm:gap-4 pt-2.5 lg:pt-0 border-t border-slate-200/50 lg:border-t-0 shrink-0">
                     {/* Technical Specs */}
                     <div className="flex flex-col items-start gap-1 text-[11px] text-slate-400 w-28 shrink-0">
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px]">
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white border border-slate-200 text-[10px]">
                         {video.resolution?.isVertical ? (
                           <Smartphone className="w-3 h-3 text-emerald-400" />
                         ) : (
@@ -1988,7 +2029,7 @@ export const VideoLibraryModule = ({
                         <span>•</span>
                         <span>{video.duration ? `${video.duration}s` : 'Short'}</span>
                         {aiMeta?.language && (
-                          <span className="px-1 rounded bg-indigo-950/60 border border-indigo-500/30 text-indigo-300 font-bold uppercase text-[9px]">
+                          <span className="px-1 rounded bg-indigo-50/60 border border-indigo-500/30 text-indigo-700 font-bold uppercase text-[9px]">
                             {aiMeta.language}
                           </span>
                         )}
@@ -2039,7 +2080,7 @@ export const VideoLibraryModule = ({
                         size="sm"
                         icon={Play}
                         onClick={() => setPreviewVideo(video)}
-                        className="text-xs py-1 px-2 text-slate-300 hover:text-white hover:bg-slate-800 shrink-0"
+                        className="text-xs py-1 px-2 text-slate-700 hover:text-slate-900 hover:bg-slate-100 shrink-0"
                         title="Preview video stream & details"
                       >
                         Watch
@@ -2051,7 +2092,7 @@ export const VideoLibraryModule = ({
                         icon={hasAi ? Edit3 : Sparkles}
                         onClick={() => openAiGenerator(video)}
                         className={`text-xs py-1 px-2.5 whitespace-nowrap shrink-0 ${
-                          hasAi ? 'text-indigo-300 hover:text-indigo-200' : 'text-indigo-400 hover:text-indigo-300 font-medium'
+                          hasAi ? 'text-indigo-700 hover:text-indigo-800' : 'text-indigo-400 hover:text-indigo-700 font-medium'
                         }`}
                       >
                         {hasAi ? 'Review AI' : 'Generate AI'}
@@ -2063,7 +2104,7 @@ export const VideoLibraryModule = ({
                         icon={Calendar}
                         onClick={() => openScheduleModal(video)}
                         className={`text-xs py-1 px-2.5 whitespace-nowrap shrink-0 ${
-                          video.status === 'queued' ? 'text-amber-400 border-amber-500/30 hover:bg-amber-950/20' : ''
+                          video.status === 'queued' ? 'text-amber-400 border-amber-500/30 hover:bg-amber-50/20' : ''
                         }`}
                       >
                         {video.status === 'queued' ? 'Reschedule' : 'Schedule'}
@@ -2078,7 +2119,7 @@ export const VideoLibraryModule = ({
 
         {/* Pagination Bar */}
         {pagination && pagination.totalPages > 1 && (
-          <div className="flex items-center justify-between pt-5 border-t border-slate-800/80 mt-5 text-xs text-slate-400">
+          <div className="flex items-center justify-between pt-5 border-t border-slate-200/80 mt-5 text-xs text-slate-400">
             <span>
               Page {pagination.page} of {pagination.totalPages} ({pagination.total?.toLocaleString()} items)
             </span>
@@ -2105,6 +2146,7 @@ export const VideoLibraryModule = ({
           </div>
         )}
       </Card>
+      )}
 
       {/* 6. Single Video AI Metadata Generator & Draft Editor Modal */}
       <Modal
@@ -2114,11 +2156,11 @@ export const VideoLibraryModule = ({
       >
         <div className="space-y-4 text-xs max-h-[75vh] overflow-y-auto pr-1">
           {/* Target Video & Provider Info */}
-          <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-2">
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
             <div className="flex items-start justify-between gap-2">
               <div>
                 <span className="text-slate-500 block text-[11px]">Selected Video:</span>
-                <span className="font-semibold text-slate-100 text-sm">
+                <span className="font-semibold text-slate-900 text-sm">
                   {selectedVideo?.cleanTitle || selectedVideo?.originalName}
                 </span>
               </div>
@@ -2130,13 +2172,13 @@ export const VideoLibraryModule = ({
               </Badge>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-900 text-[11px] text-slate-400">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200 text-[11px] text-slate-400">
               <div className="flex items-center gap-2">
                 <span>Language:</span>
                 <select
                   value={singleLanguage}
                   onChange={(e) => setSingleLanguage(e.target.value)}
-                  className="bg-slate-900 border border-slate-700 rounded px-2 py-0.5 text-slate-200 text-xs focus:outline-none"
+                  className="bg-white border border-slate-300 rounded px-2 py-0.5 text-slate-800 text-xs focus:outline-none"
                 >
                   <option value="en">English</option>
                   <option value="hi">हिंदी (Hindi)</option>
@@ -2146,12 +2188,12 @@ export const VideoLibraryModule = ({
 
               <div className="flex items-center gap-2">
                 <span className="text-slate-500">
-                  Provider: <span className="text-slate-300 font-medium capitalize">{draftForm.provider}</span>
+                  Provider: <span className="text-slate-700 font-medium capitalize">{draftForm.provider}</span>
                 </span>
                 <button
                   type="button"
                   onClick={() => setShowAiConfig((v) => !v)}
-                  className="text-indigo-400 hover:text-indigo-300 underline text-[11px] ml-1 flex items-center gap-1 cursor-pointer"
+                  className="text-indigo-400 hover:text-indigo-700 underline text-[11px] ml-1 flex items-center gap-1 cursor-pointer"
                 >
                   <Sparkles className="w-3 h-3" />
                   {draftForm.provider === 'gemini' ? 'Gemini AI Active' : 'Setup Gemini AI Key'}
@@ -2161,9 +2203,9 @@ export const VideoLibraryModule = ({
 
             {/* Optional Gemini API Key configuration card */}
             {showAiConfig && (
-              <div className="p-2.5 rounded-lg bg-indigo-950/40 border border-indigo-900/60 space-y-2 mt-2">
+              <div className="p-2.5 rounded-lg bg-indigo-50/40 border border-indigo-900/60 space-y-2 mt-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-indigo-200">Google Gemini API Key</span>
+                  <span className="text-xs font-semibold text-indigo-800">Google Gemini API Key</span>
                   <a
                     href="https://aistudio.google.com/app/apikey"
                     target="_blank"
@@ -2182,7 +2224,7 @@ export const VideoLibraryModule = ({
                     placeholder="Paste Gemini API Key (AIzaSy...)"
                     value={geminiKeyInput}
                     onChange={(e) => setGeminiKeyInput(e.target.value)}
-                    className="flex-1 bg-slate-900 border border-slate-700 rounded px-2.5 py-1 text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
+                    className="flex-1 bg-white border border-slate-300 rounded px-2.5 py-1 text-slate-800 text-xs focus:outline-none focus:border-indigo-500"
                   />
                   <Button
                     size="xs"
@@ -2204,7 +2246,7 @@ export const VideoLibraryModule = ({
           </div>
 
           {/* Context Disclaimer Alert */}
-          <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 text-[11px] text-slate-400 flex items-start gap-2">
+          <div className="p-2.5 rounded-lg bg-white/60 border border-slate-200 text-[11px] text-slate-400 flex items-start gap-2">
             <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
             <span>
               Metadata is contextually derived from filename, folder topic, notes, and duration. No visual or audio
@@ -2235,7 +2277,7 @@ export const VideoLibraryModule = ({
               {/* YouTube Shorts Title */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="font-semibold text-slate-200 block">
+                  <label className="font-semibold text-slate-800 block">
                     YouTube Shorts Title (Platform Limit: 100 Chars):
                   </label>
                   <span
@@ -2255,25 +2297,25 @@ export const VideoLibraryModule = ({
                   value={draftForm.youtubeTitle}
                   maxLength={100}
                   onChange={(e) => setDraftForm({ ...draftForm, youtubeTitle: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-100 font-medium focus:outline-none focus:border-indigo-500/60 text-xs"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-900 font-medium focus:outline-none focus:border-indigo-500/60 text-xs"
                 />
               </div>
 
               {/* Attention Hook */}
               <div>
-                <label className="font-semibold text-slate-200 block mb-1">Attention Hook (First 3s):</label>
+                <label className="font-semibold text-slate-800 block mb-1">Attention Hook (First 3s):</label>
                 <input
                   type="text"
                   value={draftForm.hook}
                   onChange={(e) => setDraftForm({ ...draftForm, hook: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-300 focus:outline-none focus:border-indigo-500/60 text-xs"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-700 focus:outline-none focus:border-indigo-500/60 text-xs"
                 />
               </div>
 
               {/* Instagram Reel Caption */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="font-semibold text-slate-200 block">
+                  <label className="font-semibold text-slate-800 block">
                     Instagram Reel Caption (Platform Limit: 2200 Chars):
                   </label>
                   <span className="text-[10px] text-slate-400">{draftForm.instagramCaption.length} / 2200</span>
@@ -2283,28 +2325,28 @@ export const VideoLibraryModule = ({
                   value={draftForm.instagramCaption}
                   maxLength={2200}
                   onChange={(e) => setDraftForm({ ...draftForm, instagramCaption: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-300 focus:outline-none focus:border-indigo-500/60 text-xs font-sans"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-700 focus:outline-none focus:border-indigo-500/60 text-xs font-sans"
                 />
               </div>
 
               {/* CTA & Category Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="font-semibold text-slate-200 block mb-1">Suggested Call to Action:</label>
+                  <label className="font-semibold text-slate-800 block mb-1">Suggested Call to Action:</label>
                   <input
                     type="text"
                     value={draftForm.cta}
                     onChange={(e) => setDraftForm({ ...draftForm, cta: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-300 focus:outline-none text-xs"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-700 focus:outline-none text-xs"
                   />
                 </div>
 
                 <div>
-                  <label className="font-semibold text-slate-200 block mb-1">Content Category:</label>
+                  <label className="font-semibold text-slate-800 block mb-1">Content Category:</label>
                   <select
                     value={draftForm.category}
                     onChange={(e) => setDraftForm({ ...draftForm, category: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-300 focus:outline-none text-xs"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-700 focus:outline-none text-xs"
                   >
                     <option value="Entertainment">Entertainment</option>
                     <option value="Education">Education</option>
@@ -2318,14 +2360,14 @@ export const VideoLibraryModule = ({
 
               {/* Hashtags */}
               <div>
-                <label className="font-semibold text-slate-200 block mb-1">
+                <label className="font-semibold text-slate-800 block mb-1">
                   Hashtags (Space separated, 3-15 clean tags):
                 </label>
                 <input
                   type="text"
                   value={draftForm.hashtags}
                   onChange={(e) => setDraftForm({ ...draftForm, hashtags: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-300 focus:outline-none text-xs"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-700 focus:outline-none text-xs"
                 />
                 <div className="flex flex-wrap gap-1 mt-2">
                   {draftForm.hashtags
@@ -2340,7 +2382,7 @@ export const VideoLibraryModule = ({
               </div>
 
               {/* Action Buttons: Save Draft, Approve, Schedule */}
-              <div className="pt-4 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
+              <div className="pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <Button
                     variant="secondary"
@@ -2357,7 +2399,7 @@ export const VideoLibraryModule = ({
                     icon={CheckCircle}
                     isLoading={isSavingDraft}
                     onClick={() => handleSaveDraft(true)}
-                    className="text-emerald-400 border-emerald-500/30 hover:bg-emerald-950/20"
+                    className="text-emerald-400 border-emerald-500/30 hover:bg-emerald-50/20"
                   >
                     Approve for Publishing
                   </Button>
@@ -2393,7 +2435,7 @@ export const VideoLibraryModule = ({
                       isBulkRunning ? 'bg-indigo-400 animate-ping' : 'bg-slate-400'
                     }`}
                   />
-                  <span className="font-semibold text-slate-200">
+                  <span className="font-semibold text-slate-800">
                     Batch Job Status: <span className="capitalize">{currentBulkJob.status}</span>
                   </span>
                 </div>
@@ -2421,7 +2463,7 @@ export const VideoLibraryModule = ({
                     {currentBulkJob.processedVideos} of {currentBulkJob.totalVideos} videos
                   </span>
                 </div>
-                <div className="w-full bg-slate-900 rounded-full h-2.5 overflow-hidden border border-slate-800">
+                <div className="w-full bg-white rounded-full h-2.5 overflow-hidden border border-slate-200">
                   <div
                     className="bg-indigo-500 h-2.5 rounded-full transition-all duration-300"
                     style={{ width: `${bulkPercent}%` }}
@@ -2430,10 +2472,10 @@ export const VideoLibraryModule = ({
               </div>
 
               {/* Metrics Counters */}
-              <div className="grid grid-cols-3 gap-3 bg-slate-950/60 p-3 rounded-lg border border-slate-800 text-center">
+              <div className="grid grid-cols-3 gap-3 bg-slate-50/60 p-3 rounded-lg border border-slate-200 text-center">
                 <div>
                   <span className="text-slate-500 block text-[10px]">Total</span>
-                  <span className="font-semibold text-slate-200 text-sm">{currentBulkJob.totalVideos}</span>
+                  <span className="font-semibold text-slate-800 text-sm">{currentBulkJob.totalVideos}</span>
                 </div>
                 <div>
                   <span className="text-slate-500 block text-[10px]">Successful</span>
@@ -2449,7 +2491,7 @@ export const VideoLibraryModule = ({
 
               {/* Active Item */}
               {isBulkRunning && currentBulkJob.currentVideoTitle && (
-                <div className="p-2.5 rounded bg-slate-950 border border-slate-800/80 text-[11px] text-slate-400 flex items-center gap-2">
+                <div className="p-2.5 rounded bg-slate-50 border border-slate-200/80 text-[11px] text-slate-400 flex items-center gap-2">
                   <RefreshCw className="w-3.5 h-3.5 text-indigo-400 animate-spin shrink-0" />
                   <span className="truncate">Processing: {currentBulkJob.currentVideoTitle}</span>
                 </div>
@@ -2463,11 +2505,11 @@ export const VideoLibraryModule = ({
                     {currentBulkJob.errors.map((err, i) => (
                       <div
                         key={i}
-                        className="p-2 rounded bg-rose-950/20 border border-rose-500/20 text-[10px] text-rose-300 flex items-start gap-1.5"
+                        className="p-2 rounded bg-rose-50/20 border border-rose-500/20 text-[10px] text-rose-700 flex items-start gap-1.5"
                       >
                         <AlertTriangle className="w-3 h-3 text-rose-400 shrink-0 mt-0.5" />
                         <div>
-                          <strong className="block text-rose-200">{err.title}</strong>
+                          <strong className="block text-rose-800">{err.title}</strong>
                           <span>{err.error}</span>
                         </div>
                       </div>
@@ -2477,7 +2519,7 @@ export const VideoLibraryModule = ({
               )}
 
               {/* Modal Actions */}
-              <div className="pt-3 border-t border-slate-800 flex justify-end gap-2">
+              <div className="pt-3 border-t border-slate-200 flex justify-end gap-2">
                 {isBulkRunning ? (
                   <Button
                     variant="danger"
@@ -2500,7 +2542,7 @@ export const VideoLibraryModule = ({
                           setSelectedVideoIds(currentBulkJob.videoIds);
                           handleStartBulkAi(true);
                         }}
-                        className="text-xs bg-indigo-950/70 border-indigo-700/50 text-indigo-300 hover:bg-indigo-900/60 hover:text-indigo-200 cursor-pointer"
+                        className="text-xs bg-indigo-50/70 border-indigo-700/50 text-indigo-700 hover:bg-indigo-900/60 hover:text-indigo-800 cursor-pointer"
                         title="Re-run AI generation for all videos in this batch"
                       >
                         Regenerate All with AI
@@ -2544,9 +2586,14 @@ export const VideoLibraryModule = ({
         title="Schedule Post for Publishing"
       >
         <form onSubmit={handleScheduleSubmit} className="space-y-4 text-xs">
+          {findPairForFolder(channelPairs, selectedVideo?.folderId || selectedFolder, selectedVideo?.folderPathIds) && (
+            <p className="text-[11px] text-slate-400">
+              This Drive folder is linked on Channels. YouTube and Instagram for that pair are selected. Change them only if you want a different account.
+            </p>
+          )}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-slate-300 font-medium">Select Target Channels:</label>
+              <label className="block text-slate-700 font-medium">Upload to this channel:</label>
               <div className="flex items-center gap-1 text-[10px]">
                 <button
                   type="button"
@@ -2554,7 +2601,7 @@ export const VideoLibraryModule = ({
                     const validIds = accounts.filter((a) => a.status === 'connected').map((a) => a._id);
                     setScheduleForm({ ...scheduleForm, selectedAccountIds: validIds });
                   }}
-                  className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800"
+                  className="px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-100"
                 >
                   Select All
                 </button>
@@ -2564,7 +2611,7 @@ export const VideoLibraryModule = ({
                     const ytIds = accounts.filter((a) => a.platform === 'youtube' && a.status === 'connected').map((a) => a._id);
                     setScheduleForm({ ...scheduleForm, selectedAccountIds: ytIds });
                   }}
-                  className="px-1.5 py-0.5 rounded bg-red-950/60 border border-red-800/40 text-red-300 hover:bg-red-900/60"
+                  className="px-1.5 py-0.5 rounded bg-red-50/60 border border-red-200/40 text-red-700 hover:bg-red-900/60"
                 >
                   All YouTube
                 </button>
@@ -2574,14 +2621,14 @@ export const VideoLibraryModule = ({
                     const igIds = accounts.filter((a) => a.platform === 'instagram' && a.status === 'connected').map((a) => a._id);
                     setScheduleForm({ ...scheduleForm, selectedAccountIds: igIds });
                   }}
-                  className="px-1.5 py-0.5 rounded bg-pink-950/60 border border-pink-800/40 text-pink-300 hover:bg-pink-900/60"
+                  className="px-1.5 py-0.5 rounded bg-pink-50/60 border border-pink-200/40 text-pink-700 hover:bg-pink-900/60"
                 >
                   All Instagram
                 </button>
                 <button
                   type="button"
                   onClick={() => setScheduleForm({ ...scheduleForm, selectedAccountIds: [] })}
-                  className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:bg-slate-800"
+                  className="px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-400 hover:bg-slate-100"
                 >
                   Clear
                 </button>
@@ -2589,11 +2636,11 @@ export const VideoLibraryModule = ({
             </div>
 
             {accounts.length === 0 ? (
-              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs">
+              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-800 text-xs">
                 No connected social channels found. Please connect your YouTube channel or Instagram account in the Connected Accounts tab first.
               </div>
             ) : (
-              <div className="space-y-1.5 max-h-48 overflow-y-auto p-1 bg-slate-950 rounded-lg border border-slate-800/80">
+              <div className="space-y-1.5 max-h-48 overflow-y-auto p-1 bg-slate-50 rounded-lg border border-slate-200/80">
                 {accounts.map((acc) => {
                   const isYt = acc.platform === 'youtube';
                   const isSelected = (scheduleForm.selectedAccountIds || []).includes(acc._id);
@@ -2604,10 +2651,10 @@ export const VideoLibraryModule = ({
                       key={acc._id}
                       className={`flex items-center justify-between p-2 rounded-lg border cursor-pointer transition-all ${
                         isDisconnected
-                          ? 'opacity-50 cursor-not-allowed bg-slate-900/30 border-slate-900'
+                          ? 'opacity-50 cursor-not-allowed bg-white/30 border-slate-200'
                           : isSelected
-                          ? 'bg-indigo-950/40 border-indigo-500/40'
-                          : 'bg-slate-900/50 border-slate-800/60 hover:border-slate-700'
+                          ? 'bg-indigo-50/40 border-indigo-500/40'
+                          : 'bg-white/50 border-slate-200/60 hover:border-slate-300'
                       }`}
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
@@ -2620,28 +2667,18 @@ export const VideoLibraryModule = ({
                             const next = e.target.checked ? [...cur, acc._id] : cur.filter((id) => id !== acc._id);
                             setScheduleForm({ ...scheduleForm, selectedAccountIds: next });
                           }}
-                          className="rounded border-slate-800 text-indigo-600 focus:ring-0"
+                          className="rounded border-slate-200 text-indigo-600 focus:ring-0"
                         />
 
-                        {acc.profilePictureUrl ? (
-                          <img
-                            src={acc.profilePictureUrl}
-                            alt=""
-                            className="w-6 h-6 rounded-full border border-slate-700 object-cover shrink-0"
-                          />
-                        ) : (
-                          <div
-                            className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 text-[10px] ${
-                              isYt ? 'bg-red-500/20 text-red-400' : 'bg-pink-500/20 text-pink-400'
-                            }`}
-                          >
-                            {isYt ? 'YT' : 'IG'}
-                          </div>
-                        )}
+                        <ChannelAvatar
+                          account={acc}
+                          size="xs"
+                          showBadge={false}
+                        />
 
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
-                            <span className="font-semibold text-slate-200 truncate text-xs">{acc.accountName}</span>
+                            <span className="font-semibold text-slate-800 truncate text-xs">{acc.accountName}</span>
                             <span
                               className={`text-[9px] px-1 py-0.2 rounded font-medium ${
                                 isYt ? 'text-red-400 bg-red-500/10' : 'text-pink-400 bg-pink-500/10'
@@ -2673,7 +2710,7 @@ export const VideoLibraryModule = ({
 
             <div className="mt-1 flex items-center justify-between text-[11px] text-slate-400">
               <span>
-                Selected: <strong className="text-slate-200 font-mono">{(scheduleForm.selectedAccountIds || []).length}</strong> channel(s)
+                Selected: <strong className="text-slate-800 font-mono">{(scheduleForm.selectedAccountIds || []).length}</strong> channel(s)
               </span>
               {(scheduleForm.selectedAccountIds || []).length > 0 && (
                 <span className="text-emerald-400 text-[10px]">
@@ -2684,54 +2721,54 @@ export const VideoLibraryModule = ({
           </div>
 
           <div>
-            <label className="block text-slate-300 font-medium mb-1">Post Title:</label>
+            <label className="block text-slate-700 font-medium mb-1">Post Title:</label>
             <input
               type="text"
               value={scheduleForm.title}
               onChange={(e) => setScheduleForm({ ...scheduleForm, title: e.target.value })}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-800 focus:outline-none"
               required
             />
           </div>
 
           <div>
-            <label className="block text-slate-300 font-medium mb-1">Caption / Description:</label>
+            <label className="block text-slate-700 font-medium mb-1">Caption / Description:</label>
             <textarea
               rows={3}
               value={scheduleForm.caption}
               onChange={(e) => setScheduleForm({ ...scheduleForm, caption: e.target.value })}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-800 focus:outline-none"
             />
           </div>
 
           <div>
-            <label className="block text-slate-300 font-medium mb-1">Hashtags (space separated):</label>
+            <label className="block text-slate-700 font-medium mb-1">Hashtags (space separated):</label>
             <input
               type="text"
               value={scheduleForm.hashtags}
               onChange={(e) => setScheduleForm({ ...scheduleForm, hashtags: e.target.value })}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-800 focus:outline-none"
             />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-slate-300 font-medium mb-1">Scheduled Date & Time:</label>
+              <label className="block text-slate-700 font-medium mb-1">Scheduled Date & Time:</label>
               <input
                 type="datetime-local"
                 value={scheduleForm.scheduledAt}
                 onChange={(e) => setScheduleForm({ ...scheduleForm, scheduledAt: e.target.value })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-800 focus:outline-none"
                 required
               />
             </div>
 
             <div>
-              <label className="block text-slate-300 font-medium mb-1">Target Timezone:</label>
+              <label className="block text-slate-700 font-medium mb-1">Target Timezone:</label>
               <select
                 value={scheduleForm.timezone || 'UTC'}
                 onChange={(e) => setScheduleForm({ ...scheduleForm, timezone: e.target.value })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-800 focus:outline-none"
               >
                 <option value="UTC">UTC (Coordinated Universal Time)</option>
                 <option value="Asia/Kolkata">Asia/Kolkata (IST +5:30)</option>
@@ -2743,16 +2780,16 @@ export const VideoLibraryModule = ({
           </div>
 
           {/* Allow Duplicate / Reschedule Option */}
-          <div className="p-3 rounded-lg bg-slate-900/60 border border-slate-800">
+          <div className="p-3 rounded-lg bg-white/60 border border-slate-200">
             <label className="flex items-start gap-2.5 cursor-pointer">
               <input
                 type="checkbox"
                 checked={scheduleForm.allowDuplicate || false}
                 onChange={(e) => setScheduleForm({ ...scheduleForm, allowDuplicate: e.target.checked })}
-                className="mt-0.5 rounded border-slate-700 text-indigo-600 focus:ring-0"
+                className="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-0"
               />
-              <div className="text-[11px] text-slate-300">
-                <span className="font-semibold text-slate-200 block">Allow duplicate schedule / reschedule</span>
+              <div className="text-[11px] text-slate-700">
+                <span className="font-semibold text-slate-800 block">Allow duplicate schedule / reschedule</span>
                 <span className="text-slate-400 block text-[10px] leading-relaxed mt-0.5">
                   Check this if this video is already scheduled or queued on a selected channel and you want to schedule another post for it.
                 </span>
@@ -2760,7 +2797,7 @@ export const VideoLibraryModule = ({
             </label>
           </div>
 
-          <div className="pt-3 border-t border-slate-800 flex justify-end gap-2">
+          <div className="pt-3 border-t border-slate-200 flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => setScheduleModalOpen(false)}>
               Cancel
             </Button>
@@ -2780,14 +2817,14 @@ export const VideoLibraryModule = ({
       >
         <form onSubmit={handleSubmitBatchSchedule} className="space-y-5 text-xs">
           {/* A. Global Quick-Setup Panel */}
-          <div className="p-4 rounded-xl bg-slate-950/70 border border-indigo-500/30 space-y-3.5 shadow-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-2.5">
+          <div className="p-4 rounded-xl bg-slate-50/70 border border-indigo-500/30 space-y-3.5 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/80 pb-2.5">
               <div className="flex items-center gap-2">
                 <div className="w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold text-xs">
                   ⚡
                 </div>
                 <div>
-                  <h4 className="font-semibold text-slate-100 text-xs">
+                  <h4 className="font-semibold text-slate-900 text-xs">
                     Quick Batch Presets (सर्व व्हिडिओंसाठी एका क्लिकमध्ये सेट करा)
                   </h4>
                   <p className="text-[10px] text-slate-400">
@@ -2804,9 +2841,16 @@ export const VideoLibraryModule = ({
                     const validIds = accounts.filter((a) => a.status === 'connected').map((a) => a._id);
                     applyGlobalAccountsToAll(validIds);
                   }}
-                  className="px-2 py-1 rounded bg-slate-900 border border-slate-700 hover:border-slate-600 text-slate-200 text-[10px] font-medium cursor-pointer"
+                  className="px-2 py-1 rounded bg-white border border-slate-300 hover:border-slate-400 text-slate-800 text-[10px] font-medium cursor-pointer"
                 >
-                  All Channels
+                  Select All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyGlobalAccountsToAll([])}
+                  className="px-2 py-1 rounded bg-white border border-slate-300 hover:border-rose-400 text-slate-500 hover:text-rose-600 text-[10px] font-medium cursor-pointer"
+                >
+                  Clear All
                 </button>
                 <button
                   type="button"
@@ -2814,9 +2858,9 @@ export const VideoLibraryModule = ({
                     const ytIds = accounts.filter((a) => a.platform === 'youtube' && a.status === 'connected').map((a) => a._id);
                     applyGlobalAccountsToAll(ytIds);
                   }}
-                  className="px-2 py-1 rounded bg-red-950/50 border border-red-800/50 hover:bg-red-900/50 text-red-300 text-[10px] font-medium flex items-center gap-1 cursor-pointer"
+                  className="px-2 py-1 rounded bg-red-50 border border-red-200 hover:bg-red-100 text-red-700 text-[10px] font-medium flex items-center gap-1 cursor-pointer"
                 >
-                  <Youtube className="w-3 h-3 text-red-400" />
+                  <Youtube className="w-3 h-3 text-red-500" />
                   YouTube Only
                 </button>
                 <button
@@ -2825,18 +2869,70 @@ export const VideoLibraryModule = ({
                     const igIds = accounts.filter((a) => a.platform === 'instagram' && a.status === 'connected').map((a) => a._id);
                     applyGlobalAccountsToAll(igIds);
                   }}
-                  className="px-2 py-1 rounded bg-pink-950/50 border border-pink-800/50 hover:bg-pink-900/50 text-pink-300 text-[10px] font-medium flex items-center gap-1 cursor-pointer"
+                  className="px-2 py-1 rounded bg-pink-50 border border-pink-200 hover:bg-pink-100 text-pink-700 text-[10px] font-medium flex items-center gap-1 cursor-pointer"
                 >
-                  <Instagram className="w-3 h-3 text-pink-400" />
+                  <Instagram className="w-3 h-3 text-pink-500" />
                   Instagram Only
                 </button>
+              </div>
+            </div>
+
+            {/* Master Channel Selector at the Top */}
+            <div className="space-y-1.5 pt-0.5 pb-1">
+              <div className="flex items-center justify-between text-[11px]">
+                <label className="text-slate-800 font-semibold flex items-center gap-1.5">
+                  <Folders className="w-3.5 h-3.5 text-indigo-500" />
+                  <span>Target Channels (येथून चॅनेल्स निवडा — सर्व व्हिडिओंवर लागू होतील):</span>
+                </label>
+                <span className="text-[10px] text-slate-400">
+                  {globalBatchConfig.selectedAccountIds?.length || 0} channels selected
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 p-2.5 rounded-xl bg-white border border-slate-200 shadow-2xs">
+                {accounts.filter((a) => a.status === 'connected').length === 0 ? (
+                  <span className="text-xs text-amber-600">No connected accounts found. Connect in Channels tab.</span>
+                ) : (
+                  accounts.filter((a) => a.status === 'connected').map((acc) => {
+                    const isYt = acc.platform === 'youtube';
+                    const isSelected = (globalBatchConfig.selectedAccountIds || []).includes(acc._id);
+
+                    return (
+                      <button
+                        key={acc._id}
+                        type="button"
+                        onClick={() => toggleGlobalAccount(acc._id)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium transition-all cursor-pointer select-none ${
+                          isSelected
+                            ? isYt
+                              ? 'bg-red-500/15 text-red-700 border-red-500 ring-2 ring-red-500/20 shadow-xs font-semibold'
+                              : 'bg-pink-500/15 text-pink-700 border-pink-500 ring-2 ring-pink-500/20 shadow-xs font-semibold'
+                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300 hover:bg-white'
+                        }`}
+                        title={`Click to ${isSelected ? 'remove from' : 'add to'} all ${batchScheduleItems.length} videos`}
+                      >
+                        {isYt ? (
+                          <Youtube className={`w-3.5 h-3.5 ${isSelected ? 'text-red-600' : 'text-slate-400'}`} />
+                        ) : (
+                          <Instagram className={`w-3.5 h-3.5 ${isSelected ? 'text-pink-600' : 'text-slate-400'}`} />
+                        )}
+                        <span>{acc.accountName}</span>
+                        {isSelected ? (
+                          <Check className="w-3.5 h-3.5 ml-0.5 text-emerald-600" />
+                        ) : (
+                          <span className="text-[10px] text-slate-400 ml-0.5">+</span>
+                        )}
+                      </button>
+                    );
+                  })
+                )}
               </div>
             </div>
 
             {/* Timing & Auto-Stagger Row */}
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
               <div className="sm:col-span-4">
-                <label className="block text-[11px] text-slate-300 font-medium mb-1 flex items-center gap-1">
+                <label className="block text-[11px] text-slate-700 font-medium mb-1 flex items-center gap-1">
                   <Clock className="w-3 h-3 text-indigo-400" />
                   Starting Date & Time (पहिला व्हिडिओ वेळ):
                 </label>
@@ -2848,12 +2944,12 @@ export const VideoLibraryModule = ({
                     setGlobalBatchConfig({ ...globalBatchConfig, startDateTime: val });
                     applyAutoStagger(val, null);
                   }}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-slate-200 focus:outline-none text-xs"
+                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none text-xs"
                 />
               </div>
 
               <div className="sm:col-span-3">
-                <label className="block text-[11px] text-slate-300 font-medium mb-1">
+                <label className="block text-[11px] text-slate-700 font-medium mb-1">
                   Interval / Gap (व्हिडिओमधील अंतर):
                 </label>
                 <select
@@ -2863,7 +2959,7 @@ export const VideoLibraryModule = ({
                     setGlobalBatchConfig({ ...globalBatchConfig, intervalMinutes: val });
                     applyAutoStagger(null, val);
                   }}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-slate-200 focus:outline-none text-xs"
+                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none text-xs"
                 >
                   <option value={30}>Every 30 Minutes</option>
                   <option value={60}>Every 1 Hour (दर १ तासाने)</option>
@@ -2878,13 +2974,13 @@ export const VideoLibraryModule = ({
               </div>
 
               <div className="sm:col-span-3">
-                <label className="block text-[11px] text-slate-300 font-medium mb-1">
+                <label className="block text-[11px] text-slate-700 font-medium mb-1">
                   Timezone (वेळ क्षेत्र):
                 </label>
                 <select
                   value={globalBatchConfig.timezone}
                   onChange={(e) => setGlobalBatchConfig({ ...globalBatchConfig, timezone: e.target.value })}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-slate-200 focus:outline-none text-xs"
+                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none text-xs"
                 >
                   <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
                   <option value="UTC">UTC (Universal Time)</option>
@@ -2900,7 +2996,7 @@ export const VideoLibraryModule = ({
                   variant="secondary"
                   size="sm"
                   onClick={() => applyAutoStagger()}
-                  className="w-full text-[11px] py-2 bg-indigo-950/60 border-indigo-700/50 hover:bg-indigo-900/60 text-indigo-300 cursor-pointer"
+                  className="w-full text-[11px] py-2 bg-indigo-50/60 border-indigo-700/50 hover:bg-indigo-900/60 text-indigo-700 cursor-pointer"
                   title="Recalculate staggered times for all items"
                 >
                   <Zap className="w-3 h-3 mr-1" />
@@ -2908,12 +3004,35 @@ export const VideoLibraryModule = ({
                 </Button>
               </div>
             </div>
+
+            {/* Overwrite / Reschedule Toggle */}
+            <div className="pt-2.5 border-t border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={Boolean(globalBatchConfig.allowDuplicate)}
+                  onChange={(e) =>
+                    setGlobalBatchConfig({
+                      ...globalBatchConfig,
+                      allowDuplicate: e.target.checked,
+                    })
+                  }
+                  className="rounded border-slate-300 text-indigo-600 focus:ring-0 cursor-pointer"
+                />
+                <span className="text-[11px] text-slate-800 font-semibold">
+                  Allow overwrite / reschedule if video is already in queue
+                </span>
+              </label>
+              <span className="text-[10px] text-slate-400">
+                (आधीच लागलेले व्हिडिओ नवीन वेळेनुसार अपडेट करण्यासाठी हा पर्याय चालू करा)
+              </span>
+            </div>
           </div>
 
           {/* B. Per-Video Customization List */}
           <div className="space-y-2.5">
-            <div className="flex items-center justify-between text-xs text-slate-300 font-medium px-1">
-              <span className="flex items-center gap-1.5 font-semibold text-slate-200">
+            <div className="flex items-center justify-between text-xs text-slate-700 font-medium px-1">
+              <span className="flex items-center gap-1.5 font-semibold text-slate-800">
                 <span>Selected Videos to Schedule ({batchScheduleItems.length})</span>
                 <span className="text-[10px] text-slate-400 font-normal">
                   — तुम्ही खाली प्रत्येक व्हिडिओचे चॅनेल आणि वेळ बदलू शकता
@@ -2925,7 +3044,12 @@ export const VideoLibraryModule = ({
             </div>
 
             <div className="max-h-[50vh] overflow-y-auto space-y-2.5 pr-1">
-              {batchScheduleItems.map((item, idx) => {
+              {batchScheduleItems.length > 40 && (
+                <p className="text-[11px] text-slate-400 px-1">
+                  Showing the first 40 of {batchScheduleItems.length.toLocaleString()} selected videos. The rest use the same channels and time gap.
+                </p>
+              )}
+              {batchScheduleItems.slice(0, 40).map((item, idx) => {
                 const video = item.video;
                 const isVertical = video?.resolution?.isVertical;
                 const connectedAccounts = accounts.filter((a) => a.status === 'connected');
@@ -2933,17 +3057,17 @@ export const VideoLibraryModule = ({
                 return (
                   <div
                     key={item.videoId}
-                    className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/90 hover:border-slate-700/90 transition-all space-y-3"
+                    className="p-3 rounded-xl bg-slate-50/80 border border-slate-200/90 hover:border-slate-300/90 transition-all space-y-3"
                   >
                     {/* Top Row: Number, Thumbnail, Title, and Scheduled Time Input */}
                     <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
                       {/* Left: Thumbnail & Title */}
                       <div className="flex items-center gap-3 flex-1 min-w-0">
-                        <div className="w-6 h-6 rounded-full bg-slate-800 border border-slate-700 text-slate-300 font-mono text-[11px] flex items-center justify-center shrink-0 font-bold">
+                        <div className="w-6 h-6 rounded-full bg-slate-100 border border-slate-300 text-slate-700 font-mono text-[11px] flex items-center justify-center shrink-0 font-bold">
                           {idx + 1}
                         </div>
 
-                        <div className="w-10 h-10 rounded-lg bg-black border border-slate-800 overflow-hidden shrink-0 flex items-center justify-center relative">
+                        <div className="w-10 h-10 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center relative">
                           {video.thumbnailUrl ? (
                             <img src={video.thumbnailUrl} alt="" className="w-full h-full object-cover" />
                           ) : (
@@ -2959,7 +3083,7 @@ export const VideoLibraryModule = ({
                             type="text"
                             value={item.title}
                             onChange={(e) => updateBatchItem(idx, 'title', e.target.value)}
-                            className="w-full bg-slate-900/60 border border-slate-800 focus:border-indigo-500 rounded px-2 py-1 text-slate-100 font-medium text-xs truncate focus:outline-none"
+                            className="w-full bg-white/60 border border-slate-200 focus:border-indigo-500 rounded px-2 py-1 text-slate-900 font-medium text-xs truncate focus:outline-none"
                             placeholder="Video Title..."
                             title="Click to edit post title"
                           />
@@ -2981,7 +3105,7 @@ export const VideoLibraryModule = ({
                             type="datetime-local"
                             value={item.scheduledAt}
                             onChange={(e) => updateBatchItem(idx, 'scheduledAt', e.target.value)}
-                            className="bg-slate-900 border border-indigo-500/40 focus:border-indigo-400 rounded-lg px-2.5 py-1 text-indigo-200 text-xs font-mono focus:outline-none"
+                            className="bg-white border border-indigo-500/40 focus:border-indigo-400 rounded-lg px-2.5 py-1 text-indigo-800 text-xs font-mono focus:outline-none"
                             required
                           />
                         </div>
@@ -2989,7 +3113,7 @@ export const VideoLibraryModule = ({
                         <button
                           type="button"
                           onClick={() => updateBatchItem(idx, 'isExpanded', !item.isExpanded)}
-                          className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-[11px] cursor-pointer"
+                          className="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-800 text-[11px] cursor-pointer"
                           title="Toggle caption/hashtags details"
                         >
                           {item.isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -2998,7 +3122,7 @@ export const VideoLibraryModule = ({
                         <button
                           type="button"
                           onClick={() => removeBatchItem(idx)}
-                          className="p-1 rounded hover:bg-red-950 text-slate-500 hover:text-red-400 transition-colors cursor-pointer"
+                          className="p-1 rounded hover:bg-red-50 text-slate-500 hover:text-red-400 transition-colors cursor-pointer"
                           title="Remove this video from batch"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -3006,49 +3130,85 @@ export const VideoLibraryModule = ({
                       </div>
                     </div>
 
-                    {/* Middle Row: Target Channel Chips for this specific video */}
-                    <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-900">
-                      <span className="text-[10px] text-slate-400 font-medium">Publish To:</span>
-                      {connectedAccounts.length === 0 ? (
-                        <span className="text-[10px] text-amber-400">No connected social accounts found</span>
-                      ) : (
-                        connectedAccounts.map((acc) => {
-                          const isYt = acc.platform === 'youtube';
-                          const isSelected = (item.selectedAccountIds || []).includes(acc._id);
+                    {/* Middle Row: Target Channel Summary & Optional Override for this specific video */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200 text-[11px]">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] text-slate-400 font-medium">Publish To ({item.selectedAccountIds?.length || 0}):</span>
+                        {(!item.selectedAccountIds || item.selectedAccountIds.length === 0) ? (
+                          <span className="text-[10px] text-amber-500 font-medium bg-amber-50 px-2 py-0.5 rounded">
+                            No channels selected (वरती चॅनेल निवडा)
+                          </span>
+                        ) : (
+                          connectedAccounts
+                            .filter((acc) => (item.selectedAccountIds || []).includes(acc._id))
+                            .map((acc) => {
+                              const isYt = acc.platform === 'youtube';
+                              return (
+                                <span
+                                  key={acc._id}
+                                  className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-medium ${
+                                    isYt
+                                      ? 'bg-red-50 text-red-700 border border-red-200'
+                                      : 'bg-pink-50 text-pink-700 border border-pink-200'
+                                  }`}
+                                >
+                                  {isYt ? (
+                                    <Youtube className="w-2.5 h-2.5 text-red-500" />
+                                  ) : (
+                                    <Instagram className="w-2.5 h-2.5 text-pink-500" />
+                                  )}
+                                  <span>{acc.accountName}</span>
+                                </span>
+                              );
+                            })
+                        )}
+                      </div>
 
-                          return (
-                            <button
-                              key={acc._id}
-                              type="button"
-                              onClick={() => toggleItemAccount(idx, acc._id)}
-                              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium transition-all cursor-pointer ${
-                                isSelected
-                                  ? isYt
-                                    ? 'bg-red-500/20 text-red-300 border-red-500/50 shadow-sm'
-                                    : 'bg-pink-500/20 text-pink-300 border-pink-500/50 shadow-sm'
-                                  : 'bg-slate-900/60 text-slate-500 border-slate-800 hover:border-slate-700'
-                              }`}
-                            >
-                              {isYt ? (
-                                <Youtube className={`w-3 h-3 ${isSelected ? 'text-red-400' : 'text-slate-500'}`} />
-                              ) : (
-                                <Instagram className={`w-3 h-3 ${isSelected ? 'text-pink-400' : 'text-slate-500'}`} />
-                              )}
-                              <span>{acc.accountName}</span>
-                              {isSelected ? (
-                                <Check className="w-3 h-3 ml-0.5 text-emerald-400" />
-                              ) : (
-                                <span className="text-[9px] text-slate-600 ml-0.5">+</span>
-                              )}
-                            </button>
-                          );
-                        })
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => updateBatchItem(idx, 'isCustomizingChannels', !item.isCustomizingChannels)}
+                        className="text-[10px] text-indigo-600 hover:text-indigo-800 underline font-medium cursor-pointer ml-auto"
+                      >
+                        {item.isCustomizingChannels ? 'Done' : 'Customize for this video'}
+                      </button>
                     </div>
+
+                    {/* Per-Video Channel Overrides (Only visible if explicitly clicked) */}
+                    {item.isCustomizingChannels && (
+                      <div className="p-2.5 rounded-xl bg-slate-100/70 border border-slate-200 space-y-1.5 animate-in fade-in duration-100">
+                        <span className="text-[10px] text-slate-500 font-medium block">
+                          या व्हिडिओंसाठी स्वतंत्र चॅनेल निवडा (Overrides default selection):
+                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {connectedAccounts.map((acc) => {
+                            const isYt = acc.platform === 'youtube';
+                            const isSelected = (item.selectedAccountIds || []).includes(acc._id);
+                            return (
+                              <button
+                                key={acc._id}
+                                type="button"
+                                onClick={() => toggleItemAccount(idx, acc._id)}
+                                className={`flex items-center gap-1 px-2.5 py-1 rounded-full border text-[10px] font-medium cursor-pointer transition-colors ${
+                                  isSelected
+                                    ? isYt
+                                      ? 'bg-red-500/20 text-red-700 border-red-500 font-semibold'
+                                      : 'bg-pink-500/20 text-pink-700 border-pink-500 font-semibold'
+                                    : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                                }`}
+                              >
+                                {isYt ? <Youtube className="w-2.5 h-2.5" /> : <Instagram className="w-2.5 h-2.5" />}
+                                <span>{acc.accountName}</span>
+                                {isSelected ? <Check className="w-2.5 h-2.5 text-emerald-600" /> : '+'}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Expanded Details: Caption & Hashtags if user wants to tweak */}
                     {item.isExpanded && (
-                      <div className="space-y-2 pt-2 border-t border-slate-800/80 animate-in fade-in duration-150">
+                      <div className="space-y-2 pt-2 border-t border-slate-200/80 animate-in fade-in duration-150">
                         <div>
                           <label className="block text-[10px] text-slate-400 font-medium mb-1">
                             Caption / Instagram Description:
@@ -3057,7 +3217,7 @@ export const VideoLibraryModule = ({
                             rows={2}
                             value={item.caption}
                             onChange={(e) => updateBatchItem(idx, 'caption', e.target.value)}
-                            className="w-full bg-slate-900 border border-slate-800 rounded p-2 text-slate-200 text-xs focus:outline-none"
+                            className="w-full bg-white border border-slate-200 rounded p-2 text-slate-800 text-xs focus:outline-none"
                             placeholder="Caption..."
                           />
                         </div>
@@ -3069,7 +3229,7 @@ export const VideoLibraryModule = ({
                             type="text"
                             value={item.hashtags}
                             onChange={(e) => updateBatchItem(idx, 'hashtags', e.target.value)}
-                            className="w-full bg-slate-900 border border-slate-800 rounded p-1.5 text-slate-200 text-xs focus:outline-none"
+                            className="w-full bg-white border border-slate-200 rounded p-1.5 text-slate-800 text-xs focus:outline-none"
                             placeholder="#Shorts #Reels..."
                           />
                         </div>
@@ -3082,14 +3242,14 @@ export const VideoLibraryModule = ({
           </div>
 
           {/* C. Modal Footer with Summary and Dispatch Button */}
-          <div className="pt-3 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="pt-3 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="text-xs text-slate-400">
               Total to Queue:{' '}
-              <strong className="text-indigo-300 font-mono">
+              <strong className="text-indigo-700 font-mono">
                 {batchScheduleItems.reduce((acc, it) => acc + (it.selectedAccountIds?.length || 0), 0)}
               </strong>{' '}
               dispatches across{' '}
-              <strong className="text-slate-200 font-mono">{batchScheduleItems.length}</strong> videos
+              <strong className="text-slate-800 font-mono">{batchScheduleItems.length}</strong> videos
             </div>
 
             <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
@@ -3128,14 +3288,14 @@ export const VideoLibraryModule = ({
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
               {/* Video Player Column */}
-              <div className="md:col-span-7 bg-black rounded-xl overflow-hidden border border-slate-800 flex flex-col items-center justify-center min-h-[360px] relative">
+              <div className="md:col-span-7 bg-slate-900 rounded-xl overflow-hidden border border-slate-200 flex flex-col items-center justify-center min-h-[360px] relative">
                 <video
                   key={previewVideo._id}
                   controls
                   autoPlay
                   preload="metadata"
                   poster={previewVideo.thumbnailUrl}
-                  className="w-full max-h-[460px] object-contain rounded-xl bg-black"
+                  className="w-full max-h-[460px] object-contain rounded-xl bg-slate-900"
                   src={`http://localhost:5000/api/videos/${previewVideo._id}/stream`}
                 >
                   Your browser does not support HTML5 video streaming.
@@ -3144,18 +3304,18 @@ export const VideoLibraryModule = ({
 
               {/* Video Specs & AI Metadata Column */}
               <div className="md:col-span-5 space-y-3">
-                <div className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2">
-                  <h4 className="text-sm font-semibold text-slate-100 truncate">
+                <div className="p-3.5 rounded-xl bg-white/60 border border-slate-200 space-y-2">
+                  <h4 className="text-sm font-semibold text-slate-900 truncate">
                     {previewVideo.cleanTitle || previewVideo.originalName}
                   </h4>
                   <p className="text-xs font-mono text-slate-400 break-all">
                     {previewVideo.originalName}
                   </p>
 
-                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/80 text-xs text-slate-300">
+                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200/80 text-xs text-slate-700">
                     <div>
                       <span className="text-slate-500 block text-[10px]">Dimensions</span>
-                      <span className="font-semibold text-slate-200">
+                      <span className="font-semibold text-slate-800">
                         {previewVideo.resolution?.width && previewVideo.resolution?.height
                           ? `${previewVideo.resolution.width}×${previewVideo.resolution.height}`
                           : previewVideo.resolution?.isVertical
@@ -3165,19 +3325,19 @@ export const VideoLibraryModule = ({
                     </div>
                     <div>
                       <span className="text-slate-500 block text-[10px]">Duration</span>
-                      <span className="font-semibold text-slate-200">
+                      <span className="font-semibold text-slate-800">
                         {formatDuration(previewVideo.duration)} ({previewVideo.duration || 0}s)
                       </span>
                     </div>
                     <div>
                       <span className="text-slate-500 block text-[10px]">File Size</span>
-                      <span className="font-semibold text-slate-200">
+                      <span className="font-semibold text-slate-800">
                         {formatBytes(previewVideo.fileSize)}
                       </span>
                     </div>
                     <div>
                       <span className="text-slate-500 block text-[10px]">Folder</span>
-                      <span className="font-semibold text-slate-200 truncate block">
+                      <span className="font-semibold text-slate-800 truncate block">
                         {videoFolderLabel(previewVideo) || 'Root'}
                       </span>
                     </div>
@@ -3185,9 +3345,9 @@ export const VideoLibraryModule = ({
                 </div>
 
                 {/* AI Metadata Card */}
-                <div className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2 text-xs">
+                <div className="p-3.5 rounded-xl bg-white/60 border border-slate-200 space-y-2 text-xs">
                   <div className="flex items-center justify-between">
-                    <span className="font-semibold text-slate-200 flex items-center gap-1.5">
+                    <span className="font-semibold text-slate-800 flex items-center gap-1.5">
                       <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
                       AI Metadata
                     </span>
@@ -3204,14 +3364,14 @@ export const VideoLibraryModule = ({
                     <div className="space-y-1.5 pt-1">
                       <div>
                         <span className="text-slate-500 block text-[10px]">Generated Title:</span>
-                        <p className="text-slate-200 font-medium">
+                        <p className="text-slate-800 font-medium">
                           {previewVideo.aiMetadata.youtubeTitle || previewVideo.aiMetadata.generatedTitle}
                         </p>
                       </div>
                       {previewVideo.aiMetadata.instagramCaption && (
                         <div>
                           <span className="text-slate-500 block text-[10px]">Caption:</span>
-                          <p className="text-slate-300 line-clamp-3 text-[11px]">
+                          <p className="text-slate-700 line-clamp-3 text-[11px]">
                             {previewVideo.aiMetadata.instagramCaption}
                           </p>
                         </div>
@@ -3222,7 +3382,7 @@ export const VideoLibraryModule = ({
                             ? previewVideo.aiMetadata.hashtags
                             : String(previewVideo.aiMetadata.hashtags).split(' ')
                           ).slice(0, 6).map((tag, idx) => (
-                            <span key={idx} className="text-[10px] text-indigo-300 bg-indigo-950/60 border border-indigo-800/40 px-1.5 py-0.5 rounded">
+                            <span key={idx} className="text-[10px] text-indigo-700 bg-indigo-50/60 border border-indigo-200/40 px-1.5 py-0.5 rounded">
                               {tag.startsWith('#') ? tag : `#${tag}`}
                             </span>
                           ))}
@@ -3243,7 +3403,7 @@ export const VideoLibraryModule = ({
                       href={previewVideo.driveWebViewLink}
                       target="_blank"
                       rel="noreferrer"
-                      className="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs flex items-center gap-1.5 transition-colors"
+                      className="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs flex items-center gap-1.5 transition-colors"
                     >
                       <ExternalLink className="w-3.5 h-3.5" />
                       Drive Link

@@ -70,6 +70,9 @@ export class InstagramService {
     params.set('response_type', 'code');
     params.set('scope', scopes);
     params.set('state', stateToken);
+    // Instagram otherwise reuses the account already logged in, so Add Instagram
+    // refreshes that account instead of saving a different one.
+    params.set('force_reauth', 'true');
 
     this._logAuthDiagnostics({ flow, endpoint: INSTAGRAM_LOGIN_AUTH_URL, params });
     return `${INSTAGRAM_LOGIN_AUTH_URL}?${params.toString()}`;
@@ -176,8 +179,10 @@ export class InstagramService {
     const username = profile.username || `ig_user_${accountId}`;
     const accountName = profile.name || username;
 
+    let created = false;
     let account = await Account.findOne({ platform: 'instagram', accountId });
     if (!account) {
+      created = true;
       account = new Account({
         platform: 'instagram',
         accountId,
@@ -209,13 +214,16 @@ export class InstagramService {
     account.tokenExpiresAt = expiresIn ? new Date(Date.now() + expiresIn * 1000) : undefined;
     account.lastSyncedAt = new Date();
     await account.save();
+    account.createdDuringConnect = created;
 
     await WorkflowLog.create({
       level: 'success',
       module: 'instagram',
       action: 'account_connected',
-      message: `Instagram account @${username} (${accountId}) connected successfully via Instagram Login`,
-      metadata: { instagramId: accountId },
+      message: created
+        ? `Instagram account @${username} (${accountId}) added via Instagram Login`
+        : `Instagram account @${username} (${accountId}) was already connected and was refreshed`,
+      metadata: { instagramId: accountId, created },
     }).catch(() => {});
 
     return account;

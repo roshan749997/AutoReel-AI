@@ -10,6 +10,7 @@ export function buildAuthUrl() {
   const cfg = getDriveTransferConfig();
   const oauth2 = createOAuthClient();
   const state = generateOAuthState(STATE_PLATFORM);
+  console.log(`[Drive Transfer OAuth] Requested scopes: ${cfg.scopes.join(' ')}`);
   const authUrl = oauth2.generateAuthUrl({
     access_type: 'offline',
     prompt: 'select_account consent',
@@ -76,6 +77,7 @@ export async function getTransferAuthStatus() {
     missingEnv: cfg.missingEnv,
     redirectUri: cfg.redirectUri,
     requestedScopes: cfg.scopes,
+    usesYouTubeClient: cfg.usesYouTubeClient,
     ...safe,
   };
 }

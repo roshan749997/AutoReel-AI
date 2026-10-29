@@ -101,11 +101,23 @@ router.post('/purge-demo', requireAdminAuth, async (req, res, next) => {
   }
 });
 
-// Generate Google (YouTube / Drive) OAuth URL
+// YouTube channel sign-in. Drive scopes are not part of this URL.
 router.get('/google/auth-url', (req, res, next) => {
   try {
     const authUrl = youtubeService.getAuthUrl();
-    res.json({ status: 'success', authUrl });
+    const scopes = (new URL(authUrl).searchParams.get('scope') || '').split(' ').filter(Boolean);
+    console.log(`[YouTube OAuth] Authorization URL scopes: ${scopes.join(' ')}`);
+    const blocked = scopes.filter((scope) =>
+      scope.includes('/auth/drive') || scope.includes('/auth/userinfo') || scope === 'openid'
+    );
+    if (blocked.length > 0) {
+      console.error(`[YouTube OAuth] Blocked scopes in authorization URL: ${blocked.join(' ')}`);
+      return next(new AppError(
+        'YouTube sign-in included scopes a Brand Account cannot grant. Drive stays on its own connection.',
+        500
+      ));
+    }
+    res.json({ status: 'success', authUrl, scopes });
   } catch (err) {
     next(new AppError(err.message, 400));
   }
@@ -120,6 +132,11 @@ router.get('/google/callback', async (req, res, next) => {
         error === 'access_denied'
           ? 'Google authorization was cancelled by the user'
           : error_description || error;
+      if (state && verifyTransferState(state)) {
+        return res.redirect(
+          `${config.clientUrl}/?tab=drive-transfer&dt_status=error&dt_error=${encodeURIComponent(msg)}`
+        );
+      }
       return res.redirect(
         `${config.clientUrl}/accounts?error=${encodeURIComponent(msg)}&error_code=${encodeURIComponent(error)}`
       );
@@ -208,7 +225,8 @@ router.get('/meta/callback', async (req, res, next) => {
     }
 
     const account = await instagramService.handleCallback(code);
-    res.redirect(`${config.clientUrl}/accounts?connected=instagram&id=${account._id}&name=${encodeURIComponent(account.username || account.accountName)}`);
+    const created = account.createdDuringConnect ? '1' : '0';
+    res.redirect(`${config.clientUrl}/accounts?connected=instagram&created=${created}&id=${account._id}&name=${encodeURIComponent(account.username || account.accountName)}`);
   } catch (err) {
     console.error('[OAuth Callback] Meta OAuth callback error:', err.message);
     res.redirect(`${config.clientUrl}/accounts?error=${encodeURIComponent(err.message)}`);
@@ -262,7 +280,16 @@ router.patch('/:id/preferences', async (req, res, next) => {
       isMadeForKids,
       autoApprove,
       preferredPublishHourUtc,
+      profilePictureUrl,
+      accountName,
     } = req.body;
+
+    if (profilePictureUrl !== undefined) {
+      account.profilePictureUrl = profilePictureUrl ? String(profilePictureUrl).trim() : null;
+    }
+    if (accountName !== undefined && String(accountName).trim()) {
+      account.accountName = String(accountName).trim();
+    }
 
     if (!account.settings) {
       account.settings = {};

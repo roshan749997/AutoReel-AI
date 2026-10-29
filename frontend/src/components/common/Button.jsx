@@ -3,10 +3,10 @@ import { Loader2 } from 'lucide-react';
 
 const variants = {
   primary: 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm shadow-indigo-900/30 border border-indigo-500/40',
-  secondary: 'bg-slate-800 hover:bg-slate-700/80 text-slate-200 border border-slate-700',
-  danger: 'bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/30',
-  ghost: 'bg-transparent hover:bg-slate-800/60 text-slate-300 border border-transparent',
-  outline: 'bg-transparent hover:bg-slate-800/40 text-slate-200 border border-slate-700',
+  secondary: 'bg-slate-100 hover:bg-slate-200/80 text-slate-800 border border-slate-300',
+  danger: 'bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200',
+  ghost: 'bg-transparent hover:bg-slate-100/60 text-slate-700 border border-transparent',
+  outline: 'bg-transparent hover:bg-slate-100/40 text-slate-800 border border-slate-300',
 };
 
 const sizes = {

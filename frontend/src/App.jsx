@@ -59,37 +59,44 @@ export default function App() {
     setBackendError(null);
 
     try {
-      // Primary system & integration statuses
-      const [healthRes, integrationsRes, checklistRes] = await Promise.allSettled([
+      // Execute all core queries concurrently for ultra-fast load
+      const [
+        healthSettled,
+        integrationsSettled,
+        checklistSettled,
+        accountsSettled,
+        postsSettled,
+        videosSettled,
+        logsSettled,
+        n8nSettled,
+      ] = await Promise.allSettled([
         api.getHealth(),
         api.getIntegrations(),
         api.getSetupChecklist(),
+        api.getAccounts(),
+        api.getPosts(),
+        api.getVideos(videoFilters),
+        api.getLogs(logFilters),
+        api.getWorkflowStatus(),
       ]);
 
-      if (healthRes.status === 'fulfilled') setHealthData(healthRes.value);
-      if (integrationsRes.status === 'fulfilled') setIntegrations(integrationsRes.value.integrations);
-      if (checklistRes.status === 'fulfilled') setChecklist(checklistRes.value);
+      if (healthSettled.status === 'fulfilled') setHealthData(healthSettled.value);
+      if (integrationsSettled.status === 'fulfilled') setIntegrations(integrationsSettled.value?.integrations);
+      if (checklistSettled.status === 'fulfilled') setChecklist(checklistSettled.value);
+      if (accountsSettled.status === 'fulfilled') setAccounts(accountsSettled.value?.data || []);
+      if (postsSettled.status === 'fulfilled') setPosts(postsSettled.value?.data || []);
+      if (videosSettled.status === 'fulfilled') {
+        setVideos(videosSettled.value?.data || []);
+        setVideoPagination(videosSettled.value?.pagination || {});
+      }
+      if (logsSettled.status === 'fulfilled') setLogs(logsSettled.value?.data || []);
+      if (n8nSettled.status === 'fulfilled') setN8nStatus(n8nSettled.value?.data || { isReachable: false });
 
-      // Connected social accounts
-      const accountsRes = await api.getAccounts().catch(() => ({ data: [] }));
-      setAccounts(accountsRes.data || []);
-
-      // Scheduled posts
-      const postsRes = await api.getPosts().catch(() => ({ data: [] }));
-      setPosts(postsRes.data || []);
-
-      // Videos
-      const videosRes = await api.getVideos(videoFilters).catch(() => ({ data: [], pagination: {} }));
-      setVideos(videosRes.data || []);
-      setVideoPagination(videosRes.pagination || {});
-
-      // Logs
-      const logsRes = await api.getLogs(logFilters).catch(() => ({ data: [] }));
-      setLogs(logsRes.data || []);
-
-      // n8n
-      const n8nRes = await api.getWorkflowStatus().catch(() => ({ data: { isReachable: false } }));
-      setN8nStatus(n8nRes.data);
+      if (healthSettled.status === 'rejected') {
+        setBackendError(
+          'Backend API is currently unreachable. Make sure your Express server is running on port 5000 (`npm run dev:backend`).'
+        );
+      }
     } catch (err) {
       console.error('[Dashboard Error] Failed to load data:', err);
       setBackendError(
@@ -103,8 +110,17 @@ export default function App() {
 
   useEffect(() => {
     loadData();
+
+    // Absolute fallback: never keep user stuck on initial loading screen for more than 3.5s
+    const safetyTimer = setTimeout(() => {
+      setIsLoadingInitial(false);
+    }, 3500);
+
     const interval = setInterval(() => loadData(false), 30000); // 30s background sync
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(safetyTimer);
+      clearInterval(interval);
+    };
   }, [loadData]);
 
   const handleSyncDrive = async () => {
@@ -134,7 +150,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden">
+    <div className="flex h-screen bg-slate-50 text-slate-900 overflow-hidden">
       {/* Sidebar Navigation */}
       <Sidebar
         activeTab={activeTab}
@@ -160,14 +176,14 @@ export default function App() {
 
         {/* Backend Connection Error Alert */}
         {backendError && (
-          <div className="bg-rose-950/40 border-b border-rose-500/30 px-6 py-2.5 flex items-center justify-between text-xs text-rose-300">
+          <div className="bg-rose-50/40 border-b border-rose-500/30 px-6 py-2.5 flex items-center justify-between text-xs text-rose-700">
             <div className="flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
               <span>{backendError}</span>
             </div>
             <button
               onClick={() => loadData(true)}
-              className="px-2.5 py-1 rounded bg-rose-600/30 hover:bg-rose-600/50 text-rose-200 font-medium transition-colors"
+              className="px-2.5 py-1 rounded bg-rose-600/30 hover:bg-rose-600/50 text-rose-800 font-medium transition-colors"
             >
               Retry
             </button>
@@ -222,6 +238,7 @@ export default function App() {
                   accounts={accounts}
                   onQueuePost={loadData}
                   onReload={loadData}
+                  onNavigate={setActiveTab}
                 />
               )}
 

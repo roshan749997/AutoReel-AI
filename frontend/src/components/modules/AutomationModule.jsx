@@ -65,7 +65,7 @@ export const AutomationModule = ({ n8nStatus, onReload }) => {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="text-base font-semibold text-slate-100">Self-Hosted n8n Engine</h3>
+                <h3 className="text-base font-semibold text-slate-900">Self-Hosted n8n Engine</h3>
                 <Badge variant={isRunning ? 'success' : 'warning'} dot>
                   {isRunning ? 'Running on 127.0.0.1:5678' : 'Not Running'}
                 </Badge>
@@ -82,7 +82,7 @@ export const AutomationModule = ({ n8nStatus, onReload }) => {
                 href="http://127.0.0.1:5678"
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 text-slate-200 hover:bg-slate-700 transition-colors border border-slate-700"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-800 hover:bg-slate-200 transition-colors border border-slate-300"
               >
                 Open n8n UI
                 <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
@@ -107,8 +107,8 @@ export const AutomationModule = ({ n8nStatus, onReload }) => {
         <div
           className={`p-4 rounded-xl border text-xs flex items-center justify-between ${
             triggerResult.success
-              ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-300'
-              : 'bg-amber-950/20 border-amber-500/30 text-amber-300'
+              ? 'bg-emerald-50/20 border-emerald-500/30 text-emerald-700'
+              : 'bg-amber-50/20 border-amber-500/30 text-amber-800'
           }`}
         >
           <div className="flex items-center gap-2 font-mono">
@@ -119,7 +119,7 @@ export const AutomationModule = ({ n8nStatus, onReload }) => {
             )}
             <span>{triggerResult.message}</span>
           </div>
-          <button onClick={() => setTriggerResult(null)} className="text-slate-400 hover:text-slate-200">
+          <button onClick={() => setTriggerResult(null)} className="text-slate-400 hover:text-slate-800">
             &times;
           </button>
         </div>
@@ -138,11 +138,11 @@ export const AutomationModule = ({ n8nStatus, onReload }) => {
               To launch your self-hosted n8n instance, ensure Docker Desktop is running on Windows, then execute in PowerShell:
             </p>
 
-            <div className="relative group bg-slate-950 rounded-lg p-3 font-mono text-[11px] text-indigo-300 border border-slate-800 flex items-center justify-between">
+            <div className="relative group bg-slate-50 rounded-lg p-3 font-mono text-[11px] text-indigo-700 border border-slate-200 flex items-center justify-between">
               <code>{dockerCommand}</code>
               <button
                 onClick={copyToClipboard}
-                className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
+                className="p-1.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
                 title="Copy command"
               >
                 {copiedCmd ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
@@ -150,14 +150,14 @@ export const AutomationModule = ({ n8nStatus, onReload }) => {
             </div>
 
             <div className="space-y-2 text-slate-400">
-              <div className="flex items-center gap-2 text-slate-300 font-medium">
+              <div className="flex items-center gap-2 text-slate-700 font-medium">
                 <Shield className="w-4 h-4 text-emerald-400" />
                 Security Specifications:
               </div>
               <ul className="list-disc pl-5 space-y-1 text-[11px] text-slate-400">
-                <li>Host binding: strictly <code className="text-slate-300">127.0.0.1:5678</code></li>
-                <li>Persistent volume: <code className="text-slate-300">video_automation_n8n_data</code></li>
-                <li>Database encryption: configured via <code className="text-slate-300">N8N_ENCRYPTION_KEY</code></li>
+                <li>Host binding: strictly <code className="text-slate-700">127.0.0.1:5678</code></li>
+                <li>Persistent volume: <code className="text-slate-700">video_automation_n8n_data</code></li>
+                <li>Database encryption: configured via <code className="text-slate-700">N8N_ENCRYPTION_KEY</code></li>
               </ul>
             </div>
           </div>
@@ -171,7 +171,7 @@ export const AutomationModule = ({ n8nStatus, onReload }) => {
           />
 
           <div className="space-y-3 text-xs">
-            <div className="p-3 rounded-lg bg-slate-950/60 border border-slate-800/80 space-y-1.5">
+            <div className="p-3 rounded-lg bg-slate-50/60 border border-slate-200/80 space-y-1.5">
               <div className="flex items-center justify-between text-indigo-400 font-semibold text-[11px]">
                 <span>1. Google Drive Ingestion</span>
                 <Badge variant="neutral">Auto-Sync</Badge>
@@ -181,7 +181,7 @@ export const AutomationModule = ({ n8nStatus, onReload }) => {
               </p>
             </div>
 
-            <div className="p-3 rounded-lg bg-slate-950/60 border border-slate-800/80 space-y-1.5">
+            <div className="p-3 rounded-lg bg-slate-50/60 border border-slate-200/80 space-y-1.5">
               <div className="flex items-center justify-between text-purple-400 font-semibold text-[11px]">
                 <span>2. AI Content Generation</span>
                 <Badge variant="purple">Gemini / Ollama</Badge>
@@ -191,7 +191,7 @@ export const AutomationModule = ({ n8nStatus, onReload }) => {
               </p>
             </div>
 
-            <div className="p-3 rounded-lg bg-slate-950/60 border border-slate-800/80 space-y-1.5">
+            <div className="p-3 rounded-lg bg-slate-50/60 border border-slate-200/80 space-y-1.5">
               <div className="flex items-center justify-between text-emerald-400 font-semibold text-[11px]">
                 <span>3. Official API Publishing</span>
                 <Badge variant="success">YouTube / Meta</Badge>

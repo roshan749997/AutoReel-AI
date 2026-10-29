@@ -4,6 +4,14 @@ import { Account } from '../models/Account.js';
 import { WorkflowLog } from '../models/WorkflowLog.js';
 import { generateOAuthState } from './cryptoService.js';
 
+// Brand Accounts cannot grant Drive or Google Account profile scopes.
+// Those scopes send accounts.google.com to /info/servicerestricted.
+const YOUTUBE_OAUTH_SCOPES = [
+  'https://www.googleapis.com/auth/youtube.upload',
+  'https://www.googleapis.com/auth/youtube',
+  'https://www.googleapis.com/auth/youtube.readonly',
+];
+
 export class YouTubeService {
   getOAuthClient() {
     if (!config.google.clientId || !config.google.clientSecret) {
@@ -19,22 +27,17 @@ export class YouTubeService {
   getAuthUrl(state = null) {
     const oauth2Client = this.getOAuthClient();
     const stateToken = state || generateOAuthState('youtube');
-    const scopes = [
-      'https://www.googleapis.com/auth/youtube.upload',
-      'https://www.googleapis.com/auth/youtube',
-      'https://www.googleapis.com/auth/youtube.readonly',
-      'https://www.googleapis.com/auth/drive.readonly',
-      'https://www.googleapis.com/auth/drive.metadata.readonly',
-      'https://www.googleapis.com/auth/userinfo.profile',
-      'https://www.googleapis.com/auth/userinfo.email',
-    ];
+    const scopes = [...YOUTUBE_OAUTH_SCOPES];
+    console.log(`[YouTube OAuth] Requested scopes: ${scopes.join(' ')}`);
 
-    // select_account ensures users can choose between multiple Google accounts independently
+    // select_account lets the user pick a Brand Account.
+    // include_granted_scopes is false so an older Drive grant is not added back.
     return oauth2Client.generateAuthUrl({
       access_type: 'offline',
       prompt: 'select_account consent',
       scope: scopes,
       state: stateToken,
+      include_granted_scopes: false,
     });
   }
 

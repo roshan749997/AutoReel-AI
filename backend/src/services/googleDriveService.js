@@ -1,10 +1,10 @@
 import { google } from 'googleapis';
 import axios from 'axios';
 import { config } from '../config/env.js';
-import { Account } from '../models/Account.js';
 import { Video } from '../models/Video.js';
 import { SyncJob } from '../models/SyncJob.js';
 import { WorkflowLog } from '../models/WorkflowLog.js';
+import { getAuthorizedDrive } from '../drive-transfer/driveClient.js';
 
 export function extractFolderId(input) {
   if (!input || typeof input !== 'string') return 'root';
@@ -60,7 +60,7 @@ export class GoogleDriveService {
   /**
    * Retrieves an authenticated Google Drive client by checking active connected accounts
    */
-  async getAuthenticatedClient(accountId = null) {
+  async getAuthenticatedClient() {
     if (!config.google.clientId || !config.google.clientSecret) {
       throw new Error('Google OAuth Client ID or Client Secret not configured in backend/.env');
     }
@@ -69,64 +69,37 @@ export class GoogleDriveService {
       this.initClient();
     }
 
-    // Lookup specified account, or any connected real Google account in DB
-    let account = null;
-    if (accountId) {
-      account = await Account.findById(accountId);
-    }
-    if (!account) {
-      account =
-        (await Account.findOne({ platform: 'youtube', status: 'connected', isDemo: false })) ||
-        (await Account.findOne({ platform: 'youtube', status: 'connected' }));
-    }
-
-    if (!account) {
-      throw new Error('No authorized Google account found. Please connect your Google account in Social Accounts.');
-    }
-
-    const { accessToken, refreshToken } = account.getTokens();
-    if (!accessToken && !refreshToken) {
-      throw new Error('Connected Google account has no stored OAuth tokens.');
-    }
-
-    // Check if account has Drive permissions
-    if (account.scopes && account.scopes.length > 0) {
-      const hasDriveScope = account.scopes.some(
-        (s) => s.includes('drive.readonly') || s.includes('drive.metadata.readonly') || s.includes('drive')
-      );
-      if (!hasDriveScope) {
-        throw new Error(
-          'Your connected Google account is missing Google Drive permissions. Please go to Social Accounts and click "Add Google Account" or "Reconnect" to grant Drive access.'
-        );
+    // Library indexing uses the Drive sign-in only. It never reads or updates a YouTube or Instagram account.
+    try {
+      const authorized = await getAuthorizedDrive();
+      await this.assertDriveGrant(authorized.drive, authorized.credential);
+      this.drive = authorized.drive;
+      this.currentAccount = null;
+      return this.drive;
+    } catch (err) {
+      if (err.code === 'TRANSFER_AUTH_REQUIRED' || err.code === 'TRANSFER_NOT_CONFIGURED') {
+        throw new Error('Google Drive is not connected. Open Drive Transfer and click Connect Drive. Social Accounts are not used for Drive.');
       }
+      throw err;
     }
+  }
 
-    this.oauth2Client.setCredentials({
-      access_token: accessToken,
-      refresh_token: refreshToken,
-    });
-
-    // Check token expiration and refresh if necessary
-    if (account.tokenExpiresAt && new Date() >= new Date(account.tokenExpiresAt)) {
-      if (refreshToken) {
-        try {
-          const { credentials } = await this.oauth2Client.refreshAccessToken();
-          account.setTokens(credentials.access_token, credentials.refresh_token || refreshToken);
-          account.tokenExpiresAt = credentials.expiry_date ? new Date(credentials.expiry_date) : undefined;
-          await account.save();
-          this.oauth2Client.setCredentials(credentials);
-        } catch (refreshErr) {
-          account.status = 'expired';
-          account.errorMessage = `Token refresh failed: ${refreshErr.message}`;
-          await account.save();
-          throw new Error(`Google authorization expired: ${refreshErr.message}. Please re-connect account.`);
-        }
+  async assertDriveGrant(drive, credential) {
+    try {
+      await drive.about.get({ fields: 'user(permissionId)' });
+    } catch (err) {
+      const details = JSON.stringify(err.response?.data || '');
+      const rejected = err.code === 401 || err.message === 'Invalid Credentials' || details.includes('invalid_grant') || details.includes('UNAUTHENTICATED');
+      if (!rejected) throw err;
+      if (credential) {
+        credential.status = 'expired';
+        credential.errorMessage = 'Google Drive authorization expired. Connect Drive again. YouTube channel tokens were not changed.';
+        await credential.save().catch(() => {});
       }
+      const error = new Error('Google Drive authorization expired. Open Drive Transfer and click Connect Drive. YouTube channel sign-in does not grant Drive access.');
+      error.code = 'TRANSFER_AUTH_REQUIRED';
+      throw error;
     }
-
-    this.drive = google.drive({ version: 'v3', auth: this.oauth2Client });
-    this.currentAccount = account;
-    return this.drive;
   }
 
   /**
@@ -225,7 +198,7 @@ export class GoogleDriveService {
         errDetails.includes('Access Not Configured');
 
       if (isScopeInsufficient) {
-        errorMsg = 'Your connected Google account is missing Google Drive permissions. Please reconnect your Google account in Social Accounts to grant Drive access.';
+        errorMsg = 'Google Drive authorization does not include read access. Open Drive Transfer and click Connect Drive. YouTube channel sign-in does not grant Drive access.';
       } else if (isApiDisabled) {
         const projectId = (config.google.clientId || '').split('-')[0] || '702701632845';
         errorMsg = `Google Drive API is disabled in Google Cloud Project ${projectId}. Please enable it at https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=${projectId} then retry.`;
@@ -676,7 +649,17 @@ export class GoogleDriveService {
     }
 
     try {
-      await this.repairStoredFolderPaths();
+      const needsRepair = await Video.exists({
+        isArchived: false,
+        folderId: { $exists: true, $nin: [null, ''] },
+        $or: [
+          { folderPathNames: { $exists: false } },
+          { folderPathNames: { $size: 0 } },
+          { folderName: 'My Drive' },
+          { 'folderPathNames.0': 'My Drive' },
+        ],
+      });
+      if (needsRepair) await this.repairStoredFolderPaths();
     } catch (err) {
       console.warn(`[GoogleDriveService] Folder path repair skipped: ${err.message}`);
     }
@@ -692,19 +675,22 @@ export class GoogleDriveService {
       const drive = await this.getAuthenticatedClient();
       const roots = await this.listChildFolders(drive, 'root');
       const build = async (nodes, depth) => {
-        const built = [];
-        for (const node of nodes) {
-          const children = depth < 6 ? await this.listChildFolders(drive, node.id) : [];
-          const childNodes = await build(children, depth + 1);
-          const count = countMap.get(node.id) || 0;
-          built.push({
-            id: node.id,
-            name: node.name,
-            count,
-            total: count + childNodes.reduce((sum, child) => sum + child.total, 0),
-            children: childNodes.sort((a, b) => a.name.localeCompare(b.name)),
-          });
-        }
+        const built = await Promise.all(
+          nodes.map(async (node) => {
+            const children = depth < 6 ? await this.listChildFolders(drive, node.id) : [];
+            const childNodes = await build(children, depth + 1);
+            const count = countMap.get(node.id) || 0;
+            return {
+              id: node.id,
+              name: node.name,
+              count,
+              total: count + childNodes.reduce((sum, child) => sum + child.total, 0),
+              children: childNodes
+                .filter((child) => (child.total || 0) > 0)
+                .sort((a, b) => a.name.localeCompare(b.name)),
+            };
+          })
+        );
         return built.sort((a, b) => a.name.localeCompare(b.name));
       };
       tree = await build(roots, 0);

@@ -6,9 +6,9 @@ import { Badge } from '../common/Badge.jsx';
 const titleMap = {
   overview: { title: 'Dashboard Overview', desc: 'Central command for accounts, queue, and content workflows' },
   accounts: { title: 'Social Accounts', desc: 'Manage official YouTube Data API & Meta Instagram Graph API connections' },
-  channels: { title: 'Channels', desc: 'One Drive folder, one YouTube channel, and one Instagram account' },
-  library: { title: 'Google Drive Video Library', desc: 'Catalog and stream 20,000+ videos directly from Drive' },
-  queue: { title: 'Publishing Queue', desc: 'See which video is going to which YouTube or Instagram channel' },
+  channels: { title: 'Channels', desc: 'Link each Drive folder to one YouTube and one Instagram account' },
+  library: { title: 'Google Drive Video Library', desc: 'Pick a channel folder to see only that account’s videos' },
+  queue: { title: 'Publishing Queue', desc: 'Posts grouped by channel: one folder, one YouTube, one Instagram' },
   calendar: { title: 'Publishing Calendar', desc: 'Timeline view of scheduled and published content' },
   automation: { title: 'Automation Workflows', desc: 'Self-hosted n8n pipeline orchestration on 127.0.0.1' },
   logs: { title: 'System Activity Logs', desc: 'Audit trail for syncing, AI generation, and publishing attempts' },
@@ -19,18 +19,18 @@ export const Header = ({ activeTab, onOpenMobile, onRefresh, isRefreshing, syste
   const current = titleMap[activeTab] || { title: 'Dashboard', desc: '' };
 
   return (
-    <header className="h-16 px-6 bg-slate-900/60 backdrop-blur-md border-b border-slate-800/80 flex items-center justify-between sticky top-0 z-30">
+    <header className="h-16 px-6 bg-white/90 backdrop-blur-md border-b border-slate-200 flex items-center justify-between sticky top-0 z-30">
       <div className="flex items-center gap-4">
         <button
           onClick={onOpenMobile}
-          className="p-2 -ml-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 lg:hidden"
+          className="p-2 -ml-2 rounded-lg text-slate-400 hover:text-slate-800 hover:bg-slate-100 lg:hidden"
           aria-label="Open sidebar"
         >
           <Menu className="w-5 h-5" />
         </button>
         <div>
-          <h2 className="text-sm font-semibold text-slate-100">{current.title}</h2>
-          <p className="text-xs text-slate-400 hidden sm:block">{current.desc}</p>
+          <h2 className="text-sm font-semibold text-slate-900">{current.title}</h2>
+          <p className="text-xs text-slate-500 hidden sm:block">{current.desc}</p>
         </div>
       </div>
 
