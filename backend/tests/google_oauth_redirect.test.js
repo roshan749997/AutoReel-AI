@@ -53,3 +53,4 @@ test('YouTube Service: Auth URL contains only YouTube scopes and correct redirec
   assert.equal(urlObj.searchParams.get('redirect_uri'), config.google.redirectUri);
   assert.equal(urlObj.searchParams.get('state'), 'test_state_token');
 });
+
