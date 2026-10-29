@@ -105,8 +105,10 @@ router.post('/purge-demo', requireAdminAuth, async (req, res, next) => {
 router.get('/google/auth-url', (req, res, next) => {
   try {
     const authUrl = youtubeService.getAuthUrl();
-    const scopes = (new URL(authUrl).searchParams.get('scope') || '').split(' ').filter(Boolean);
-    console.log(`[YouTube OAuth] Authorization URL scopes: ${scopes.join(' ')}`);
+    const urlObj = new URL(authUrl);
+    const scopes = (urlObj.searchParams.get('scope') || '').split(' ').filter(Boolean);
+    const redirectUri = urlObj.searchParams.get('redirect_uri');
+    console.log(`[YouTube OAuth] Authorization URL requested: redirect_uri=${redirectUri}, scope_count=${scopes.length}`);
     const blocked = scopes.filter((scope) =>
       scope.includes('/auth/drive') || scope.includes('/auth/userinfo') || scope === 'openid'
     );
@@ -117,7 +119,13 @@ router.get('/google/auth-url', (req, res, next) => {
         500
       ));
     }
-    res.json({ status: 'success', authUrl, scopes });
+    res.json({
+      status: 'success',
+      authUrl,
+      redirectUri,
+      data: { authUrl, redirectUri, scopes },
+      scopes,
+    });
   } catch (err) {
     next(new AppError(err.message, 400));
   }
@@ -125,56 +133,71 @@ router.get('/google/auth-url', (req, res, next) => {
 
 // Google OAuth callback handler
 router.get('/google/callback', async (req, res, next) => {
+  const clientBase = (config.clientUrl || '').replace(/\/$/, '');
   try {
     const { code, state, error, error_description } = req.query;
+    console.log(`[Google OAuth Callback] Received callback: hasCode=${Boolean(code)}, hasState=${Boolean(state)}, hasError=${Boolean(error)}`);
+
     if (error) {
       const msg =
         error === 'access_denied'
           ? 'Google authorization was cancelled by the user'
           : error_description || error;
+      console.warn(`[Google OAuth Callback] Authorization error returned: ${error} - ${msg}`);
+
       if (state && verifyTransferState(state)) {
         return res.redirect(
-          `${config.clientUrl}/?tab=drive-transfer&dt_status=error&dt_error=${encodeURIComponent(msg)}`
+          `${clientBase}/?tab=drive-transfer&dt_status=error&dt_error=${encodeURIComponent(msg)}`
         );
       }
       return res.redirect(
-        `${config.clientUrl}/accounts?error=${encodeURIComponent(msg)}&error_code=${encodeURIComponent(error)}`
+        `${clientBase}/?tab=accounts&error=${encodeURIComponent(msg)}&error_code=${encodeURIComponent(error)}`
       );
     }
+
     if (state && verifyTransferState(state)) {
+      console.log('[Google OAuth Callback] Processing Drive Transfer authorization state');
       if (!code) {
         return res.redirect(
-          `${config.clientUrl}/?tab=drive-transfer&dt_status=error&dt_error=${encodeURIComponent('Missing authorization code.')}`
+          `${clientBase}/?tab=drive-transfer&dt_status=error&dt_error=${encodeURIComponent('Missing authorization code.')}`
         );
       }
       try {
         await exchangeAuthCode(code);
-        return res.redirect(`${config.clientUrl}/?tab=drive-transfer&dt_status=connected`);
+        console.log('[Google OAuth Callback] Drive Transfer credential saved successfully');
+        return res.redirect(`${clientBase}/?tab=drive-transfer&dt_status=connected`);
       } catch (transferErr) {
+        console.error(`[Google OAuth Callback] Drive Transfer code exchange failed: ${transferErr.message}`);
         return res.redirect(
-          `${config.clientUrl}/?tab=drive-transfer&dt_status=error&dt_error=${encodeURIComponent(transferErr.message || 'Drive Transfer sign-in failed')}`
+          `${clientBase}/?tab=drive-transfer&dt_status=error&dt_error=${encodeURIComponent(transferErr.message || 'Drive Transfer sign-in failed')}`
         );
       }
     }
+
     if (!state || !verifyOAuthState(state, 'youtube')) {
+      console.warn(`[Google OAuth Callback] OAuth state invalid or expired: hasState=${Boolean(state)}`);
       return res.redirect(
-        `${config.clientUrl}/accounts?error=Invalid+or+expired+OAuth+security+state&error_code=INVALID_STATE`
+        `${clientBase}/?tab=accounts&error=Invalid+or+expired+OAuth+security+state&error_code=INVALID_STATE`
       );
     }
     if (!code) {
+      console.warn('[Google OAuth Callback] Missing authorization code in callback request');
       return res.redirect(
-        `${config.clientUrl}/accounts?error=Missing+authorization+code&error_code=MISSING_CODE`
+        `${clientBase}/?tab=accounts&error=Missing+authorization+code&error_code=MISSING_CODE`
       );
     }
 
+    console.log('[Google OAuth Callback] Exchanging authorization code for YouTube tokens...');
     const account = await youtubeService.handleCallback(code);
+    console.log(`[Google OAuth Callback] YouTube channel connected successfully: id=${account._id}, name="${account.accountName}", channelId=${account.accountId}`);
+
     res.redirect(
-      `${config.clientUrl}/accounts?connected=youtube&id=${account._id}&name=${encodeURIComponent(
+      `${clientBase}/?tab=accounts&connected=youtube&id=${account._id}&name=${encodeURIComponent(
         account.accountName
       )}`
     );
   } catch (err) {
-    console.error('[OAuth Callback] Google OAuth callback error:', err.message);
+    console.error('[Google OAuth Callback] Google OAuth callback error:', err.message);
     const projectId = err.projectId || (config.google.clientId || '').split('-')[0] || '702701632845';
     const enableUrl =
       err.enableUrl ||
@@ -190,7 +213,7 @@ router.get('/google/callback', async (req, res, next) => {
     }).catch(() => {});
 
     res.redirect(
-      `${config.clientUrl}/accounts?error=${encodeURIComponent(
+      `${clientBase}/?tab=accounts&error=${encodeURIComponent(
         err.message
       )}&error_code=${encodeURIComponent(errorCode)}&project_id=${encodeURIComponent(
         projectId
@@ -211,25 +234,26 @@ router.get('/meta/auth-url', (req, res, next) => {
 
 // Meta OAuth callback handler
 router.get('/meta/callback', async (req, res, next) => {
+  const clientBase = (config.clientUrl || '').replace(/\/$/, '');
   try {
     const { code, state, error, error_description } = req.query;
     if (error) {
       const errMessage = error_description || error;
-      return res.redirect(`${config.clientUrl}/accounts?error=${encodeURIComponent(errMessage)}`);
+      return res.redirect(`${clientBase}/?tab=accounts&error=${encodeURIComponent(errMessage)}`);
     }
     if (!state || !verifyOAuthState(state, 'instagram')) {
-      return res.redirect(`${config.clientUrl}/accounts?error=Invalid+or+expired+OAuth+security+state`);
+      return res.redirect(`${clientBase}/?tab=accounts&error=Invalid+or+expired+OAuth+security+state`);
     }
     if (!code) {
-      return res.redirect(`${config.clientUrl}/accounts?error=Missing+authorization+code`);
+      return res.redirect(`${clientBase}/?tab=accounts&error=Missing+authorization+code`);
     }
 
     const account = await instagramService.handleCallback(code);
     const created = account.createdDuringConnect ? '1' : '0';
-    res.redirect(`${config.clientUrl}/accounts?connected=instagram&created=${created}&id=${account._id}&name=${encodeURIComponent(account.username || account.accountName)}`);
+    res.redirect(`${clientBase}/?tab=accounts&connected=instagram&created=${created}&id=${account._id}&name=${encodeURIComponent(account.username || account.accountName)}`);
   } catch (err) {
     console.error('[OAuth Callback] Meta OAuth callback error:', err.message);
-    res.redirect(`${config.clientUrl}/accounts?error=${encodeURIComponent(err.message)}`);
+    res.redirect(`${clientBase}/?tab=accounts&error=${encodeURIComponent(err.message)}`);
   }
 });
 

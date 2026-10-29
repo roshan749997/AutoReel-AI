@@ -14,7 +14,7 @@ services:
       - key: PORT
         value: 10000
       - key: CLIENT_URL
-        sync: false
+        sync: false # Set to deployed Frontend URL (e.g. https://autoreel-ai-1.onrender.com)
       - key: MONGODB_URI
         sync: false
       - key: ENCRYPTION_KEY
@@ -30,7 +30,7 @@ services:
       - key: GOOGLE_CLIENT_SECRET
         sync: false
       - key: GOOGLE_REDIRECT_URI
-        sync: false
+        sync: false # Set to deployed Backend Callback: https://autoreel-ai-2.onrender.com/api/accounts/google/callback
       - key: META_APP_ID
         sync: false
       - key: META_APP_SECRET

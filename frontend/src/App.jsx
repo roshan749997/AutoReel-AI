@@ -17,11 +17,18 @@ import { AlertTriangle, Loader2 } from 'lucide-react';
 
 const getInitialTab = () => {
   if (typeof window !== 'undefined') {
+    // Defense-in-depth: If a browser callback somehow lands on frontend domain /api/accounts/google/callback, bounce to backend
+    if (window.location.pathname.startsWith('/api/accounts/google/callback')) {
+      const backendBase = (import.meta.env.VITE_API_URL || 'https://autoreel-ai-2.onrender.com/api').replace(/\/api\/?$/, '');
+      window.location.replace(`${backendBase}/api/accounts/google/callback${window.location.search}`);
+      return 'accounts';
+    }
+
     const params = new URLSearchParams(window.location.search);
     if (params.get('tab') === 'drive-transfer') {
       return 'drive-transfer';
     }
-    if (params.has('error') || params.has('connected') || params.has('error_code')) {
+    if (params.get('tab') === 'accounts' || params.has('error') || params.has('connected') || params.has('error_code')) {
       return 'accounts';
     }
     if (window.location.pathname.includes('/accounts')) {

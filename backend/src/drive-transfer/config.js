@@ -1,3 +1,5 @@
+import { config } from '../config/env.js';
+
 /**
  * Configuration for Drive Transfer only.
  * Prefers DRIVE_TRANSFER_* variables. If those are empty, it reads the existing
@@ -14,13 +16,18 @@ export function getDriveTransferConfig() {
   const clientSecret = ownClientSecret || String(process.env.GOOGLE_CLIENT_SECRET || '').trim();
   const port = String(process.env.PORT || '5000').trim();
   const defaultRedirect = `http://localhost:${port}/api/drive-transfer/oauth/callback`;
-  const registeredYouTubeRedirect = String(process.env.GOOGLE_REDIRECT_URI || '').trim();
+  const registeredYouTubeRedirect = String(config?.google?.redirectUri || process.env.GOOGLE_REDIRECT_URI || '').trim();
   // A separate Drive OAuth client can use its own callback. The YouTube client only has
   // GOOGLE_REDIRECT_URI registered, so Drive sign-in on that client must use the same address.
-  const redirectUri = String(
+  let redirectUri = String(
     process.env.DRIVE_TRANSFER_REDIRECT_URI
     || (ownClientId ? defaultRedirect : registeredYouTubeRedirect || defaultRedirect)
   ).trim();
+
+  // If redirectUri mistakenly targets frontend domain, rewrite to backend callback
+  if (/autoreel-ai-1\.onrender\.com/i.test(redirectUri)) {
+    redirectUri = redirectUri.replace(/autoreel-ai-1\.onrender\.com/i, 'autoreel-ai-2.onrender.com');
+  }
   const scope = String(process.env.DRIVE_TRANSFER_OAUTH_SCOPE || DEFAULT_SCOPE).trim();
   const clientUrl = String(process.env.CLIENT_URL || 'http://localhost:5173').trim();
   const maxFiles = parseInt(process.env.DRIVE_TRANSFER_MAX_FILES || '50000', 10);

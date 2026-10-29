@@ -220,8 +220,11 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
     try {
       setErrorMsg(null);
       const res = await api.getYouTubeAuthUrl();
-      if (res.data?.authUrl) {
-        window.location.href = res.data.authUrl;
+      const targetUrl = res.authUrl || res.data?.authUrl;
+      if (targetUrl) {
+        window.location.href = targetUrl;
+      } else {
+        throw new Error('Google authorization URL not returned by server.');
       }
     } catch (err) {
       setErrorMsg(`Failed to initiate Google OAuth: ${err.message}`);

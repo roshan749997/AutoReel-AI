@@ -16,6 +16,38 @@ const cleanApiKey = (val) => {
   return String(val).replace(/["']/g, '').trim();
 };
 
+export const resolveGoogleRedirectUri = () => {
+  const envUri = (process.env.GOOGLE_REDIRECT_URI || '').trim();
+  const clientUrl = (process.env.CLIENT_URL || '').trim().replace(/\/$/, '');
+  const renderExternal = (process.env.RENDER_EXTERNAL_URL || '').trim().replace(/\/$/, '');
+  const backendBase = renderExternal || (process.env.BACKEND_URL || '').trim().replace(/\/$/, '');
+
+  // Guard against misconfiguration where GOOGLE_REDIRECT_URI was pointed at frontend static domain
+  const isFrontendDomain = (uri) => {
+    if (!uri) return false;
+    if (clientUrl && (uri === clientUrl || uri.startsWith(`${clientUrl}/`))) return true;
+    if (/autoreel-ai-1\.onrender\.com/i.test(uri)) return true;
+    return false;
+  };
+
+  if (envUri && isFrontendDomain(envUri)) {
+    const targetBase = backendBase || 'https://autoreel-ai-2.onrender.com';
+    console.warn(`[OAuth Config] WARNING: GOOGLE_REDIRECT_URI (${envUri}) points to frontend domain. Overriding to backend callback: ${targetBase}/api/accounts/google/callback`);
+    return `${targetBase}/api/accounts/google/callback`;
+  }
+
+  if (envUri) {
+    return envUri;
+  }
+
+  if (backendBase) {
+    return `${backendBase}/api/accounts/google/callback`;
+  }
+
+  const port = process.env.PORT || '5000';
+  return `http://localhost:${port}/api/accounts/google/callback`;
+};
+
 export const config = {
   port: parseInt(process.env.PORT || '5000', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -43,7 +75,7 @@ export const config = {
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID || '',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-    redirectUri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/accounts/google/callback',
+    redirectUri: resolveGoogleRedirectUri(),
     driveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID || '',
   },
 
