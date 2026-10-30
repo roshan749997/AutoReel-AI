@@ -1,4 +1,18 @@
-const API_BASE = import.meta.env.VITE_API_URL || '/api';
+export const resolveApiBase = () => {
+  const envUrl = import.meta.env.VITE_API_URL;
+  if (envUrl && typeof envUrl === 'string' && envUrl.startsWith('http')) {
+    return envUrl.replace(/\/+$/, '');
+  }
+  if (typeof window !== 'undefined' && window.location?.hostname?.includes('onrender.com')) {
+    return 'https://autoreel-ai-2.onrender.com/api';
+  }
+  return envUrl || '/api';
+};
+
+export const API_BASE = resolveApiBase();
+export const getVideoThumbnailUrl = (videoId) => (videoId ? `${API_BASE}/videos/${videoId}/thumbnail` : '');
+export const getVideoStreamUrl = (videoId) => (videoId ? `${API_BASE}/videos/${videoId}/stream` : '');
+
 const API_KEY = import.meta.env.VITE_DASHBOARD_API_KEY || '';
 
 async function request(endpoint, options = {}) {
@@ -123,6 +137,8 @@ export const api = {
   retryVideo: (id) => request(`/videos/${id}/retry`, { method: 'POST' }),
   getVideo: (id) => request(`/videos/${id}`),
   updateVideo: (id, updates) => request(`/videos/${id}`, { method: 'PATCH', body: updates }),
+  getVideoThumbnailUrl,
+  getVideoStreamUrl,
 
   // AI Metadata Generation & Pipeline
   generateAiMetadata: (payload) => request('/ai/generate', { method: 'POST', body: payload }),

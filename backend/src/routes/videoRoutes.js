@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import axios from 'axios';
 import { Video } from '../models/Video.js';
 import { Post } from '../models/Post.js';
 import { Account } from '../models/Account.js';
@@ -519,13 +520,27 @@ router.get('/:id/thumbnail', async (req, res, next) => {
       return res.status(404).send('Not found');
     }
 
-    const { stream, contentType } = await googleDriveService.getThumbnailStream(
-      video.driveFileId,
-      video.accountId
-    );
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'public, max-age=86400');
-    stream.pipe(res);
+    try {
+      const { stream, contentType } = await googleDriveService.getThumbnailStream(
+        video.driveFileId,
+        video.accountId
+      );
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return stream.pipe(res);
+    } catch (streamErr) {
+      if (video.thumbnailUrl) {
+        const axiosRes = await axios.get(video.thumbnailUrl, {
+          responseType: 'stream',
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          timeout: 8000,
+        });
+        res.setHeader('Content-Type', axiosRes.headers['content-type'] || 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return axiosRes.data.pipe(res);
+      }
+      throw streamErr;
+    }
   } catch (err) {
     res.status(404).send('Thumbnail unavailable');
   }
@@ -554,7 +569,7 @@ router.patch('/:id', async (req, res, next) => {
   }
 });
 
-// 10. Stream video file directly (Used by Meta Reels container publishing & preview)
+// 10. Stream video file directly (Supports HTML5 range requests & seeks for preview & Meta container)
 router.get('/:id/stream', async (req, res, next) => {
   try {
     const video = await Video.findById(req.params.id);
@@ -566,16 +581,36 @@ router.get('/:id/stream', async (req, res, next) => {
       return next(new AppError('Video has no linked Google Drive file ID', 400));
     }
 
-    const mediaStream = await googleDriveService.getFileStream(video.driveFileId);
+    const drive = await googleDriveService.getAuthenticatedClient(video.accountId);
+    const range = req.headers.range;
 
-    res.setHeader('Content-Type', video.mimeType || 'video/mp4');
-    if (video.fileSize) {
-      res.setHeader('Content-Length', video.fileSize);
+    const requestOptions = {
+      responseType: 'stream',
+      headers: range ? { Range: range } : {},
+    };
+
+    const driveResponse = await drive.files.get(
+      { fileId: video.driveFileId, alt: 'media', supportsAllDrives: true },
+      requestOptions
+    );
+
+    res.status(driveResponse.status || 200);
+
+    const forwardHeaders = ['content-type', 'content-length', 'content-range', 'accept-ranges'];
+    for (const h of forwardHeaders) {
+      if (driveResponse.headers?.[h]) {
+        res.setHeader(h, driveResponse.headers[h]);
+      }
     }
-    res.setHeader('Accept-Ranges', 'bytes');
+    if (!driveResponse.headers?.['content-type']) {
+      res.setHeader('Content-Type', video.mimeType || 'video/mp4');
+    }
+    if (!driveResponse.headers?.['accept-ranges']) {
+      res.setHeader('Accept-Ranges', 'bytes');
+    }
     res.setHeader('Cache-Control', 'public, max-age=3600');
 
-    mediaStream.pipe(res);
+    driveResponse.data.pipe(res);
   } catch (err) {
     next(err);
   }

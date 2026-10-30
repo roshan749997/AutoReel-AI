@@ -53,7 +53,7 @@ import { Button } from '../common/Button.jsx';
 import { Badge } from '../common/Badge.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
 import { Modal } from '../common/Modal.jsx';
-import { api } from '../../api/client.js';
+import { api, getVideoThumbnailUrl, getVideoStreamUrl } from '../../api/client.js';
 import { driveTransferApi } from '../../api/driveTransferClient.js';
 import { FolderTree, FolderBoxes, videoFolderLabel } from './FolderTree.jsx';
 import { ChannelAvatar } from '../common/ChannelAvatar.jsx';
@@ -82,8 +82,13 @@ export function formatDuration(seconds) {
 
 export const VideoThumbnail = ({ video, onPreview }) => {
   const [imgError, setImgError] = useState(false);
-  const proxyUrl = `/api/videos/${video._id}/thumbnail`;
+  const proxyUrl = getVideoThumbnailUrl(video._id);
   const [src, setSrc] = useState(proxyUrl);
+
+  useEffect(() => {
+    setSrc(getVideoThumbnailUrl(video._id));
+    setImgError(false);
+  }, [video._id]);
 
   return (
     <div
@@ -91,7 +96,7 @@ export const VideoThumbnail = ({ video, onPreview }) => {
       className="group/thumb relative w-16 h-20 sm:w-20 sm:h-24 rounded-lg overflow-hidden bg-white border border-slate-200 shrink-0 flex items-center justify-center cursor-pointer hover:border-indigo-500/60 transition-colors shadow-xs select-none"
       title="Click to preview video"
     >
-      {!imgError ? (
+      {!imgError && src ? (
         <img
           src={src}
           alt=""
@@ -3132,8 +3137,17 @@ export const VideoLibraryModule = ({
                         </div>
 
                         <div className="w-10 h-10 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center relative">
-                          {video.thumbnailUrl ? (
-                            <img src={video.thumbnailUrl} alt="" className="w-full h-full object-cover" />
+                          {video._id || video.thumbnailUrl ? (
+                            <img
+                              src={getVideoThumbnailUrl(video._id) || video.thumbnailUrl}
+                              alt=""
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                if (video.thumbnailUrl && e.target.src !== video.thumbnailUrl) {
+                                  e.target.src = video.thumbnailUrl;
+                                }
+                              }}
+                            />
                           ) : (
                             <Film className="w-4 h-4 text-slate-600" />
                           )}
@@ -3358,9 +3372,9 @@ export const VideoLibraryModule = ({
                   controls
                   autoPlay
                   preload="metadata"
-                  poster={previewVideo.thumbnailUrl}
+                  poster={getVideoThumbnailUrl(previewVideo._id) || previewVideo.thumbnailUrl}
                   className="w-full max-h-[460px] object-contain rounded-xl bg-slate-900"
-                  src={`http://localhost:5000/api/videos/${previewVideo._id}/stream`}
+                  src={getVideoStreamUrl(previewVideo._id)}
                 >
                   Your browser does not support HTML5 video streaming.
                 </video>

@@ -22,6 +22,7 @@ import { Badge } from '../common/Badge.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
 import { Modal } from '../common/Modal.jsx';
 import { ChannelAvatar } from '../common/ChannelAvatar.jsx';
+import { getVideoThumbnailUrl } from '../../api/client.js';
 
 export const PublishedVideosModule = ({
   posts = [],
@@ -294,12 +295,17 @@ export const PublishedVideosModule = ({
                 <div>
                   {/* Top Thumbnail Preview */}
                   <div className="relative aspect-video bg-slate-50 overflow-hidden group">
-                    {video.thumbnailUrl ? (
+                    {video?._id || video?.thumbnailUrl ? (
                       <img
-                        src={video.thumbnailUrl}
+                        src={getVideoThumbnailUrl(video?._id) || video?.thumbnailUrl}
                         alt={post.title}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                         loading="lazy"
+                        onError={(e) => {
+                          if (video?.thumbnailUrl && e.target.src !== video.thumbnailUrl) {
+                            e.target.src = video.thumbnailUrl;
+                          }
+                        }}
                       />
                     ) : (
                       <div className="w-full h-full flex flex-col items-center justify-center bg-slate-50 text-slate-600">
