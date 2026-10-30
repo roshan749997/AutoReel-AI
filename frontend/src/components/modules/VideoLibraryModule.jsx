@@ -47,6 +47,8 @@ import {
   ChevronDown,
   ChevronUp,
   Send,
+  X,
+  Minus,
 } from 'lucide-react';
 import { Card, CardHeader } from '../common/Card.jsx';
 import { Button } from '../common/Button.jsx';
@@ -534,23 +536,38 @@ export const VideoLibraryModule = ({
       setSelectedVideoIds([]);
       return;
     }
-    if (total > 50) {
+    if (total > 500) {
       const label = selectedFolder ? 'in this folder' : 'matching the current filters';
       if (!window.confirm(`Select all ${total.toLocaleString()} videos ${label}?`)) return;
     }
     try {
       setIsSelectingAll(true);
       const res = await api.getVideoIds(catalogQueryParams());
-      setSelectedVideoIds((res.data || []).map(String));
+      const ids = (res.data || []).map(String);
+      if (ids.length === 0) {
+        setSelectedVideoIds(videos.map((v) => String(v._id)));
+      } else {
+        setSelectedVideoIds(ids);
+      }
     } catch (err) {
+      setSelectedVideoIds(videos.map((v) => String(v._id)));
       alert(`Could not select all videos: ${err.message}`);
     } finally {
       setIsSelectingAll(false);
     }
   };
 
+  // Toggle selection for all videos on the current page
   const toggleSelectAllPage = () => {
-    selectAllMatching();
+    if (!videos || videos.length === 0) return;
+    const pageIds = videos.map((v) => String(v._id));
+    const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedVideoIds.includes(id));
+
+    if (allPageSelected) {
+      setSelectedVideoIds((prev) => prev.filter((id) => !pageIds.includes(id)));
+    } else {
+      setSelectedVideoIds((prev) => Array.from(new Set([...prev, ...pageIds])));
+    }
   };
 
   // Save Google Gemini API Key and test connection
@@ -1107,9 +1124,8 @@ export const VideoLibraryModule = ({
 
   const catalogTotal = pagination?.total || 0;
   const isAllMatchingSelected = catalogTotal > 0 && selectedVideoIds.length >= catalogTotal;
-  const isAllPageSelected = isAllMatchingSelected || (
-    videos.length > 0 && videos.every((video) => selectedVideoIds.includes(String(video._id)))
-  );
+  const isAllPageSelected = videos.length > 0 && videos.every((video) => selectedVideoIds.includes(String(video._id)));
+  const hasSomePageSelected = videos.length > 0 && videos.some((video) => selectedVideoIds.includes(String(video._id)));
   const driveConnected = Boolean(driveLink?.connected);
 
   return (
@@ -1872,15 +1888,35 @@ export const VideoLibraryModule = ({
                 <span>Select Approved</span>
               </button>
 
+              {/* Select Page Toggle */}
+              <button
+                onClick={toggleSelectAllPage}
+                className="flex items-center gap-1.5 text-slate-700 hover:text-slate-900 px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:border-slate-300 transition-colors cursor-pointer text-xs font-medium"
+                title={isAllPageSelected ? 'Deselect all videos on this page' : 'Select all videos on this page'}
+              >
+                {isAllPageSelected ? (
+                  <CheckSquare className="w-3.5 h-3.5 text-indigo-600" />
+                ) : hasSomePageSelected ? (
+                  <Minus className="w-3.5 h-3.5 text-indigo-500" />
+                ) : (
+                  <Square className="w-3.5 h-3.5 text-slate-500" />
+                )}
+                <span>
+                  {isAllPageSelected ? `Deselect Page (${videos.length})` : `Select Page (${videos.length})`}
+                </span>
+              </button>
+
+              {/* Select All in Catalog */}
               <button
                 onClick={selectAllMatching}
                 disabled={isSelectingAll}
-                className="flex items-center gap-1.5 text-slate-700 hover:text-slate-900 px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:border-slate-300 transition-colors cursor-pointer disabled:opacity-60"
+                className="flex items-center gap-1.5 text-slate-700 hover:text-slate-900 px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:border-slate-300 transition-colors cursor-pointer disabled:opacity-60 text-xs font-medium"
+                title="Select all videos matching current filters across all pages"
               >
                 {isSelectingAll ? (
                   <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin" />
                 ) : isAllMatchingSelected ? (
-                  <CheckSquare className="w-3.5 h-3.5 text-indigo-400" />
+                  <CheckSquare className="w-3.5 h-3.5 text-indigo-600" />
                 ) : (
                   <Square className="w-3.5 h-3.5 text-slate-500" />
                 )}
@@ -1892,6 +1928,17 @@ export const VideoLibraryModule = ({
                     : `Select All${catalogTotal ? ` (${catalogTotal.toLocaleString()})` : ''}`}
                 </span>
               </button>
+
+              {selectedVideoIds.length > 0 && (
+                <button
+                  onClick={() => setSelectedVideoIds([])}
+                  className="flex items-center gap-1 text-slate-500 hover:text-rose-600 px-2.5 py-1.5 rounded-lg hover:bg-rose-50 border border-transparent hover:border-rose-200 transition-colors cursor-pointer text-xs font-medium"
+                  title="Clear all selections"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Clear ({selectedVideoIds.length.toLocaleString()})</span>
+                </button>
+              )}
 
               {currentBulkJob && (
                 <Button
@@ -1937,11 +1984,13 @@ export const VideoLibraryModule = ({
               <div className="flex-1 min-w-0 flex items-center gap-2">
                 <input
                   type="checkbox"
-                  checked={isAllMatchingSelected}
-                  disabled={isSelectingAll}
-                  onChange={selectAllMatching}
+                  ref={(el) => {
+                    if (el) el.indeterminate = hasSomePageSelected && !isAllPageSelected;
+                  }}
+                  checked={isAllPageSelected}
+                  onChange={toggleSelectAllPage}
                   className="rounded bg-white border-slate-300 text-indigo-600 focus:ring-0 cursor-pointer"
-                  title="Select all videos in this catalog view"
+                  title={isAllPageSelected ? 'Deselect this page' : 'Select all videos on this page'}
                 />
                 <span>Video & Information</span>
               </div>
@@ -1952,6 +2001,37 @@ export const VideoLibraryModule = ({
                 <span className="w-56 text-right pr-2">Actions</span>
               </div>
             </div>
+
+            {/* Catalog-Wide Selection Banner */}
+            {isAllPageSelected && catalogTotal > videos.length && (
+              <div className="bg-indigo-50/80 border border-indigo-200/80 rounded-lg px-4 py-2 text-xs text-indigo-900 flex flex-wrap items-center justify-center gap-2 text-center animate-in fade-in duration-200">
+                {isAllMatchingSelected ? (
+                  <span>
+                    All <strong>{catalogTotal.toLocaleString()}</strong> videos in the catalog are selected.
+                  </span>
+                ) : (
+                  <span>
+                    All <strong>{videos.length}</strong> videos on this page are selected.
+                  </span>
+                )}
+                {!isAllMatchingSelected ? (
+                  <button
+                    onClick={selectAllMatching}
+                    disabled={isSelectingAll}
+                    className="font-semibold text-indigo-600 hover:text-indigo-800 underline ml-1 cursor-pointer disabled:opacity-60"
+                  >
+                    {isSelectingAll ? 'Selecting…' : `Select all ${catalogTotal.toLocaleString()} videos in the catalog`}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setSelectedVideoIds([])}
+                    className="font-semibold text-rose-600 hover:text-rose-800 underline ml-1 cursor-pointer"
+                  >
+                    Clear selection
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Line-by-Line Video Items */}
             {videos.map((video) => {
