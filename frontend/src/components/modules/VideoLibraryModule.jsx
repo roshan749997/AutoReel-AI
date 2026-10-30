@@ -135,6 +135,7 @@ export const VideoThumbnail = ({ video, onPreview }) => {
 export const VideoLibraryModule = ({
   videos,
   pagination,
+  currentFilters,
   onSearch,
   onFilterChange,
   onPageChange,
@@ -144,19 +145,34 @@ export const VideoLibraryModule = ({
   onNavigate,
 }) => {
   // Search, Filter & Understandable Sorting state
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [aspectFilter, setAspectFilter] = useState('');
+  const [searchQuery, setSearchQuery] = useState(currentFilters?.search || '');
+  const [statusFilter, setStatusFilter] = useState(currentFilters?.status || '');
+  const [aspectFilter, setAspectFilter] = useState(currentFilters?.isVertical || '');
   const [sizeFilter, setSizeFilter] = useState('');
-  const [approvalFilter, setApprovalFilter] = useState('');
+  const [approvalFilter, setApprovalFilter] = useState(currentFilters?.approvalStatus || '');
   const [selectedFolder, setSelectedFolder] = useState(() => {
+    if (currentFilters?.folderId) return currentFilters.folderId;
     if (typeof sessionStorage === 'undefined') return '';
     const focus = sessionStorage.getItem('library-folder-focus') || '';
     if (focus) sessionStorage.removeItem('library-folder-focus');
     return focus;
   });
   const [showAllVideos, setShowAllVideos] = useState(false);
-  const [sortOption, setSortOption] = useState('modified_desc');
+  const [sortOption, setSortOption] = useState(currentFilters?.sort || 'modified_desc');
+
+  // Sync state if parent filters change
+  useEffect(() => {
+    if (!currentFilters) return;
+    if (currentFilters.status !== undefined && currentFilters.status !== statusFilter) {
+      setStatusFilter(currentFilters.status);
+    }
+    if (currentFilters.folderId !== undefined && currentFilters.folderId !== selectedFolder) {
+      setSelectedFolder(currentFilters.folderId);
+    }
+    if (currentFilters.search !== undefined && currentFilters.search !== searchQuery) {
+      setSearchQuery(currentFilters.search);
+    }
+  }, [currentFilters]);
 
   // Google Drive Accounts & Folders state
   const [selectedDriveAccount, setSelectedDriveAccount] = useState('all');
@@ -460,15 +476,31 @@ export const VideoLibraryModule = ({
 
   // Filters change handler
   const handleFilterUpdate = (newFilters) => {
+    if (newFilters.search !== undefined) setSearchQuery(newFilters.search);
+    if (newFilters.status !== undefined) setStatusFilter(newFilters.status);
+    if (newFilters.isVertical !== undefined) setAspectFilter(newFilters.isVertical);
+    if (newFilters.approvalStatus !== undefined) setApprovalFilter(newFilters.approvalStatus);
+    if (newFilters.folderId !== undefined) setSelectedFolder(newFilters.folderId);
+    if (newFilters.sort !== undefined) setSortOption(newFilters.sort);
+    if (newFilters.sizeFilter !== undefined) setSizeFilter(newFilters.sizeFilter);
+    if (newFilters.accountId !== undefined) setSelectedDriveAccount(newFilters.accountId);
+
+    const nextSearch = newFilters.search !== undefined ? newFilters.search : searchQuery;
+    const nextStatus = newFilters.status !== undefined ? newFilters.status : statusFilter;
+    const nextAspect = newFilters.isVertical !== undefined ? newFilters.isVertical : aspectFilter;
+    const nextApproval = newFilters.approvalStatus !== undefined ? newFilters.approvalStatus : approvalFilter;
+    const nextFolder = newFilters.folderId !== undefined ? newFilters.folderId : selectedFolder;
+    const nextSort = newFilters.sort !== undefined ? newFilters.sort : sortOption;
+    const nextAccount = newFilters.accountId !== undefined ? newFilters.accountId : selectedDriveAccount;
+
     const combined = {
-      search: searchQuery,
-      status: statusFilter,
-      isVertical: aspectFilter,
-      approvalStatus: approvalFilter,
-      folderId: selectedFolder,
-      sort: sortOption,
-      accountId: selectedDriveAccount === 'all' ? '' : selectedDriveAccount,
-      ...newFilters,
+      search: nextSearch,
+      status: nextStatus,
+      isVertical: nextAspect,
+      approvalStatus: nextApproval,
+      folderId: nextFolder,
+      sort: nextSort,
+      accountId: nextAccount === 'all' ? '' : nextAccount,
     };
 
     if (newFilters.sizeFilter !== undefined) {
@@ -510,7 +542,7 @@ export const VideoLibraryModule = ({
   const catalogQueryParams = () => {
     const params = {
       search: searchQuery || '',
-      status: statusFilter || '',
+      status: statusFilter || (selectedFolder ? 'all' : ''),
       isVertical: aspectFilter || '',
       approvalStatus: approvalFilter || '',
       folderId: selectedFolder || '',
@@ -1717,6 +1749,7 @@ export const VideoLibraryModule = ({
                 className="bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none text-xs"
               >
                 <option value="">Status: Available (Hide Queued)</option>
+                <option value="all">Status: All (Show Queued & Published)</option>
                 <option value="discovered">Discovered</option>
                 <option value="metadata_ready">Metadata Ready</option>
                 <option value="queued">Queued (In Publishing Queue)</option>

@@ -237,6 +237,7 @@ export default function App() {
                 <VideoLibraryModule
                   videos={videos}
                   pagination={videoPagination}
+                  currentFilters={videoFilters}
                   onSearch={(q) => setVideoFilters((prev) => ({ ...prev, search: q, page: 1 }))}
                   onFilterChange={(f) => setVideoFilters((prev) => ({ ...prev, ...f, page: 1 }))}
                   onPageChange={(p) => setVideoFilters((prev) => ({ ...prev, page: p }))}

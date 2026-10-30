@@ -157,7 +157,8 @@ function catalogFilters(req, driveInfo, activeQueuedPostVideoIds) {
         andConditions.push({ _id: { $nin: activeQueuedPostVideoIds } });
       }
     }
-  } else {
+  } else if (!req.query.folderId) {
+    // Only exclude queued and published videos from global catalog when no specific folder is selected
     andConditions.push({ status: { $nin: ['queued', 'published'] } });
     if (activeQueuedPostVideoIds.length > 0) {
       andConditions.push({ _id: { $nin: activeQueuedPostVideoIds } });
