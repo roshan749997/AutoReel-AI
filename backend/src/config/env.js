@@ -16,6 +16,30 @@ const cleanApiKey = (val) => {
   return String(val).replace(/["']/g, '').trim();
 };
 
+export const resolveBackendPublicUrl = () => {
+  const renderExternal = (process.env.RENDER_EXTERNAL_URL || '').trim().replace(/\/$/, '');
+  const backendBase = (process.env.BACKEND_URL || '').trim().replace(/\/$/, '');
+  const publicUrl = (process.env.PUBLIC_URL || '').trim().replace(/\/$/, '');
+  const clientUrl = (process.env.CLIENT_URL || '').trim().replace(/\/$/, '');
+
+  const isDeadTunnelOrLocal = (url) => {
+    if (!url) return true;
+    if (/localhost|127\.0\.0\.1/i.test(url)) return true;
+    if (/ngrok/i.test(url)) return true;
+    return false;
+  };
+
+  if (renderExternal) return renderExternal;
+  if (backendBase && !isDeadTunnelOrLocal(backendBase)) return backendBase;
+  if (publicUrl && !isDeadTunnelOrLocal(publicUrl)) return publicUrl;
+  if (/onrender\.com/i.test(clientUrl) || process.env.NODE_ENV === 'production') {
+    return 'https://autoreel-ai-2.onrender.com';
+  }
+
+  const port = process.env.PORT || '5000';
+  return `http://localhost:${port}`;
+};
+
 export const resolveGoogleRedirectUri = () => {
   const envUri = (process.env.GOOGLE_REDIRECT_URI || '').trim();
   const clientUrl = (process.env.CLIENT_URL || '').trim().replace(/\/$/, '');
@@ -52,6 +76,7 @@ export const config = {
   port: parseInt(process.env.PORT || '5000', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
+  publicUrl: resolveBackendPublicUrl(),
 
   // Database
   mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/video_automation',

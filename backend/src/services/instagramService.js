@@ -451,14 +451,15 @@ export class InstagramService {
 
         const statusRes = await axios.get(`${graphBase}/${containerId}`, {
           params: {
-            fields: 'status_code',
+            fields: 'status_code,status',
             access_token: accessToken,
           },
         });
 
         status = statusRes.data?.status_code;
         if (status === 'ERROR') {
-          throw new Error('Meta Graph API video container processing failed with status ERROR');
+          const detail = statusRes.data?.status || 'Media container processing failed';
+          throw new Error(`Meta Graph API video container processing failed with status ERROR: ${detail}`);
         }
       }
 

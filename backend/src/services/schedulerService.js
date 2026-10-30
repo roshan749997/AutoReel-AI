@@ -5,7 +5,7 @@ import { WorkflowLog } from '../models/WorkflowLog.js';
 import { googleDriveService } from './googleDriveService.js';
 import { youtubeService } from './youtubeService.js';
 import { instagramService } from './instagramService.js';
-import { config } from '../config/env.js';
+import { config, resolveBackendPublicUrl } from '../config/env.js';
 import axios from 'axios';
 
 export class SchedulerService {
@@ -666,17 +666,9 @@ export class SchedulerService {
         await post.save();
 
         // Resolve public video URL for Meta container upload
-        let publicBaseUrl = process.env.PUBLIC_URL;
-        if (!publicBaseUrl && config.meta.redirectUri) {
-          try {
-            publicBaseUrl = new URL(config.meta.redirectUri).origin;
-          } catch (_) {}
-        }
-        if (!publicBaseUrl) {
-          publicBaseUrl = 'http://localhost:5000';
-        }
-
+        const publicBaseUrl = resolveBackendPublicUrl();
         const videoStreamUrl = `${publicBaseUrl}/api/videos/${video._id}/stream`;
+        console.log(`[Instagram Publish] Dispatching reel to Meta container with videoUrl=${videoStreamUrl}`);
 
         // Format caption with hashtags
         const tagsString = Array.isArray(post.hashtags) && post.hashtags.length > 0
