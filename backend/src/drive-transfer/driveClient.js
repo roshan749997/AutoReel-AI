@@ -7,7 +7,7 @@ import { withDriveBackoff } from './errors.js';
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
-export function createOAuthClient() {
+export function createOAuthClient(overrideRedirectUri = null) {
   const cfg = getDriveTransferConfig();
   if (!cfg.configured) {
     const error = new Error(
@@ -17,7 +17,8 @@ export function createOAuthClient() {
     error.code = 'TRANSFER_NOT_CONFIGURED';
     throw error;
   }
-  return new google.auth.OAuth2(cfg.clientId, cfg.clientSecret, cfg.redirectUri);
+  const redirectUri = overrideRedirectUri || cfg.redirectUri;
+  return new google.auth.OAuth2(cfg.clientId, cfg.clientSecret, redirectUri);
 }
 
 export async function getAuthorizedDrive() {

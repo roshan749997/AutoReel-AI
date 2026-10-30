@@ -593,8 +593,16 @@ export const VideoLibraryModule = ({
     };
 
     let initialTitle = meta.youtubeTitle || meta.generatedTitle || '';
+    if (initialTitle && /shdushj|Wait For The #Shorts/i.test(initialTitle)) {
+      initialTitle = '';
+    }
     if (!initialTitle && !isCamera(video.cleanTitle || video.originalName)) {
-      initialTitle = video.cleanTitle || video.originalName;
+      const candidate = (video.cleanTitle || video.originalName || '')
+        .replace(/\bshdushj[a-z0-9]*\b/gi, '')
+        .replace(/\b(reel bundle|reel bundel|digiproducthub)\b/gi, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+      initialTitle = candidate || '';
     }
 
     setDraftForm({

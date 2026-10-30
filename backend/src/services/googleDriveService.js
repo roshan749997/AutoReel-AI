@@ -5,6 +5,7 @@ import { Video } from '../models/Video.js';
 import { SyncJob } from '../models/SyncJob.js';
 import { WorkflowLog } from '../models/WorkflowLog.js';
 import { getAuthorizedDrive } from '../drive-transfer/driveClient.js';
+import { extractCleanTopic } from './aiService.js';
 
 export function extractFolderId(input) {
   if (!input || typeof input !== 'string') return 'root';
@@ -405,6 +406,13 @@ export class GoogleDriveService {
                 ? (file.videoMediaMetadata.height || 0) > (file.videoMediaMetadata.width || 0)
                 : true;
 
+              const folderDisplayName = folderTrail.names[folderTrail.names.length - 1] || job.folderName || '';
+              const cleanMeta = extractCleanTopic({
+                originalName: file.name,
+                folderName: folderDisplayName,
+                folderPathNames: folderTrail.names,
+              });
+
               return {
                 updateOne: {
                   filter: { driveFileId: file.id },
@@ -412,7 +420,7 @@ export class GoogleDriveService {
                     $set: {
                       driveFileId: file.id,
                       originalName: file.name,
-                      cleanTitle: file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '),
+                      cleanTitle: cleanMeta.cleanTitle || file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '),
                       mimeType: file.mimeType,
                       fileSize: parseInt(file.size || '0', 10),
                       duration: file.videoMediaMetadata ? Math.round((file.videoMediaMetadata.durationMillis || 0) / 1000) : 0,

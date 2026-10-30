@@ -66,7 +66,7 @@ export const config = {
   ai: {
     provider: process.env.AI_PROVIDER || 'gemini', // 'gemini' | 'ollama' | 'manual'
     geminiApiKey: cleanApiKey(process.env.GEMINI_API_KEY),
-    geminiModel: process.env.GEMINI_MODEL || 'gemini-flash-latest',
+    geminiModel: process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite',
     ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
     ollamaModel: process.env.OLLAMA_MODEL || 'llama3.2',
   },

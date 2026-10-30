@@ -163,7 +163,8 @@ router.get('/google/callback', async (req, res, next) => {
         );
       }
       try {
-        await exchangeAuthCode(code);
+        const callbackUrl = config.google.redirectUri || `${req.protocol}://${req.get('host')}/api/accounts/google/callback`;
+        await exchangeAuthCode(code, callbackUrl);
         console.log('[Google OAuth Callback] Drive Transfer credential saved successfully');
         return res.redirect(`${clientBase}/?tab=drive-transfer&dt_status=connected`);
       } catch (transferErr) {

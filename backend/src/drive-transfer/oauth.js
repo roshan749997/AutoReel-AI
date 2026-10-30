@@ -25,8 +25,8 @@ export function verifyTransferState(state) {
   return verifyOAuthState(state, STATE_PLATFORM);
 }
 
-export async function exchangeAuthCode(code) {
-  const oauth2 = createOAuthClient();
+export async function exchangeAuthCode(code, overrideRedirectUri = null) {
+  const oauth2 = createOAuthClient(overrideRedirectUri);
   const { tokens } = await oauth2.getToken(code);
   oauth2.setCredentials(tokens);
 

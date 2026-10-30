@@ -4,6 +4,106 @@ import { WorkflowLog } from '../models/WorkflowLog.js';
 import { Video } from '../models/Video.js';
 import { BulkAiJob } from '../models/BulkAiJob.js';
 
+/**
+ * Utility functions for extracting clean topics and titles from bulk bundle files
+ */
+export function titleCase(str) {
+  return String(str || '')
+    .split(' ')
+    .filter(Boolean)
+    .map((w) => (w.length > 2 ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : w.toUpperCase()))
+    .join(' ');
+}
+
+export function isGibberishToken(token) {
+  const t = String(token || '').toLowerCase().replace(/[^a-z]/g, '');
+  if (t.length < 7) return false;
+  // 5+ consonants in a row
+  if (/[bcdfghjklmnpqrstvwxyz]{5,}/i.test(t)) return true;
+  // Vowel ratio
+  const vowels = (t.match(/[aeiou]/gi) || []).length;
+  if (vowels / t.length < 0.20) return true;
+  // Hex hashes of length >= 12
+  if (/^[0-9a-f]{12,}$/i.test(token)) return true;
+  return false;
+}
+
+export function cleanToken(str) {
+  return String(str || '')
+    .replace(/\.[a-zA-Z0-9]{2,5}$/, '')
+    .replace(/https?:\/\/\S+/gi, '')
+    .replace(/[a-zA-Z0-9.-]+\.(com|in|org|net|io|co|store|biz)/gi, '')
+    .replace(/\b(digiproducthub|learnbux|msrb|ybreels?)\b/gi, '')
+    .replace(/[\*\_]+/g, ' ')
+    .trim();
+}
+
+export function extractTopicAndNumber(raw) {
+  if (!raw) return { topic: '', itemNum: null };
+  let s = cleanToken(raw);
+
+  // Extract number if present: (32), [32], #32, etc.
+  const numMatch = s.match(/(?:\(|\[|\b#?|\bpart\s*)(\d+)(?:\)|\]|\b)/i);
+  const itemNum = numMatch ? numMatch[1] : null;
+
+  // Unwrap parentheses around words: e.g. '(Tools)' -> 'Tools'
+  s = s.replace(/\(([a-zA-Z\s]+)\)/g, ' $1 ');
+  // Remove remaining brackets/parens with numbers or junk
+  s = s.replace(/[\(\[\{][^\)\]\}]*[\)\]\}]/g, ' ');
+
+  // Split into words and filter gibberish & bundle noise
+  const words = s.split(/[\s\-_]+/).filter((w) => {
+    if (!w) return false;
+    if (isGibberishToken(w)) return false;
+    if (/^\d+$/.test(w)) return false;
+    if (/^(reel|reels|bundle|bundel|pack|collection|part|vol|volume|video|videos|mp4|hd|primium|premium|animated|graphics|yb)$/i.test(w)) return false;
+    return true;
+  });
+
+  const topic = words.join(' ').trim();
+  return { topic, itemNum };
+}
+
+export function extractCleanTopic(videoData = {}) {
+  const original = videoData.originalName || '';
+  const folder = videoData.folderName || '';
+  const pathNames = Array.isArray(videoData.folderPathNames) ? videoData.folderPathNames : [];
+
+  const fileExt = extractTopicAndNumber(original);
+  let itemNum = fileExt.itemNum;
+  let topicCandidate = fileExt.topic;
+
+  if (!topicCandidate || topicCandidate.length < 3) {
+    const folderExt = extractTopicAndNumber(folder);
+    if (!itemNum) itemNum = folderExt.itemNum;
+    if (folderExt.topic && folderExt.topic.length >= 3) {
+      topicCandidate = folderExt.topic;
+    }
+  }
+
+  // If still empty or weak, look up the folderPathNames backwards
+  if (!topicCandidate || topicCandidate.length < 3) {
+    for (let i = pathNames.length - 1; i >= 0; i--) {
+      const ext = extractTopicAndNumber(pathNames[i]);
+      if (!itemNum && ext.itemNum) itemNum = ext.itemNum;
+      if (ext.topic && ext.topic.length >= 3) {
+        topicCandidate = ext.topic;
+        break;
+      }
+    }
+  }
+
+  // Normalize topic
+  let cleanTopic = topicCandidate ? titleCase(topicCandidate) : 'Trending Reel';
+  cleanTopic = cleanTopic
+    .replace(/\b3d\b/i, '3D')
+    .replace(/\bAi\b/i, 'AI')
+    .replace(/\bHd\b/i, 'HD');
+
+  const cleanTitle = itemNum ? `${cleanTopic} #${itemNum}` : cleanTopic;
+  return { cleanTopic, itemNum, cleanTitle };
+}
+
 export class AiService {
   constructor() {
     this.provider = config.ai.provider;
@@ -154,6 +254,8 @@ export class AiService {
    * Builds prompt for LLMs in English, Hindi, or Marathi
    */
   buildPrompt(videoData, language = 'en') {
+    const { cleanTopic, cleanTitle } = extractCleanTopic(videoData);
+
     const langInstructions = {
       en: 'Generate all titles, hooks, descriptions, and call-to-actions in natural, engaging English.',
       hi: 'Generate all titles, hooks, descriptions, and call-to-actions in natural, catchy Hindi (Devanagari script or conversational Hindi with standard English keywords) suitable for Indian YouTube Shorts and Instagram Reels audience.',
@@ -164,21 +266,24 @@ export class AiService {
 ${langInstructions[language] || langInstructions.en}
 
 Strict Context Guidelines:
-- Context is derived from the file name, parent folder, and user notes. Do NOT claim you have watched or visually analyzed the video.
-- Do NOT invent fictional celebrities, fake breaking news, or false claims not in the context.
+- Context is derived from the detected topic, category folder, and user notes.
+- Do NOT claim you have watched or visually analyzed the video.
+- Do NOT invent fictional celebrities, fake breaking news, or false claims.
 
 Video Context:
-- File Name: "${videoData.cleanTitle || videoData.originalName}"
+- Clean Topic: "${cleanTopic}"
+- Clean Title: "${cleanTitle}"
 - Category/Folder: "${videoData.folderName || 'General'}"
 - Duration: ${videoData.duration ? `${videoData.duration} seconds` : 'Short vertical reel'}
 - User Notes: "${videoData.notes || 'None'}"
 
-CRITICAL ANTI-NUMBER RULE:
-- If the File Name or title looks like a camera timestamp or raw numbers (e.g. "VID 20260801 191006 507", "VID_...", "IMG_...", or any sequence of digits), DO NOT repeat or include ANY of these numbers/codes in the title, caption, or hook!
-- Instead, create a catchy, viral, human-like title and opening hook based on viral Shorts themes (Curiosity, Shock, Suspense, Entertainment).
+CRITICAL CLEANLINESS & VIRALITY RULES:
+- Focus entirely on the Clean Topic "${cleanTopic}".
+- NEVER include bundle names (e.g. "reel bundle", "bundel", "pack"), folder ranges ("2001-2500"), website URLs, or random alphanumeric hashes (e.g. "shdushj...") in the title, description, or hashtags!
+- If the file name looks like a camera timestamp or raw numbers, create a catchy, viral title and opening hook based on viral Shorts themes (Curiosity, Shock, Suspense, Entertainment).
 
 Platform Constraints:
-- YouTube Shorts Title MUST be strictly under 90 characters so "#Shorts" fits comfortably within YouTube's 100 character limit.
+- YouTube Shorts Title MUST be strictly under 85 characters with 1-2 emojis, leaving space for #Shorts.
 - Instagram Reel Caption should be 200-500 characters, starting with the hook, followed by context, and ending with a CTA.
 - Opening hook: the first 3-second spoken or on-screen text to stop scrolling.
 - Hashtags: 5 to 10 relevant, non-repetitive tags starting with #.
@@ -198,50 +303,68 @@ You MUST return ONLY a valid JSON object matching this schema without any markdo
   }
 
   /**
-   * Call Gemini Free Tier with bounded exponential backoff retries for rate limits
+   * Call Gemini Free Tier with candidate model fallback and bounded exponential backoff
    */
-  async callGeminiWithRetry(prompt, videoData, language, maxRetries = 2) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.ai.geminiModel}:generateContent?key=${config.ai.geminiApiKey}`;
+  async callGeminiWithRetry(prompt, videoData, language) {
+    const candidateModels = [
+      config.ai.geminiModel,
+      'gemini-3.5-flash-lite',
+      'gemini-flash-lite-latest',
+      'gemini-3.1-flash-lite',
+    ].filter((m, i, arr) => m && arr.indexOf(m) === i);
 
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        const res = await axios.post(
-          url,
-          {
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              responseMimeType: 'application/json',
-              temperature: 0.7,
+    let lastError = null;
+
+    for (const model of candidateModels) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.ai.geminiApiKey}`;
+
+      for (let attempt = 0; attempt <= 1; attempt++) {
+        try {
+          const res = await axios.post(
+            url,
+            {
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: {
+                responseMimeType: 'application/json',
+                temperature: 0.7,
+              },
             },
-          },
-          { timeout: 15000 }
-        );
+            { timeout: 12000 }
+          );
 
-        const rawText = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!rawText) throw new Error('Empty response from Gemini');
+          const rawText = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (!rawText) throw new Error('Empty response from Gemini');
 
-        const parsed = this.safeJsonParse(rawText);
-        return {
-          ...parsed,
-          provider: 'gemini',
-          language,
-          generatedAt: new Date(),
-        };
-      } catch (err) {
-        const status = err.response?.status;
-        const isRateLimit = status === 429;
-        const isTransient = status === 503 || status === 500 || err.code === 'ECONNABORTED';
+          const parsed = this.safeJsonParse(rawText);
+          return {
+            ...parsed,
+            provider: 'gemini',
+            model,
+            language,
+            generatedAt: new Date(),
+          };
+        } catch (err) {
+          lastError = err;
+          const status = err.response?.status;
+          const isRateLimit = status === 429;
+          const isTransient = status === 503 || status === 500 || err.code === 'ECONNABORTED';
 
-        if ((isRateLimit || isTransient) && attempt < maxRetries) {
-          const delayMs = (attempt + 1) * 1500;
-          console.warn(`[AI Service] Gemini transient error (${status || err.message}). Retrying in ${delayMs}ms (Attempt ${attempt + 1}/${maxRetries})...`);
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-          continue;
+          if (isRateLimit) {
+            console.warn(`[AI Service] Model ${model} rate-limited (429). Switching to next candidate model.`);
+            break;
+          }
+
+          if (isTransient && attempt < 1) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            continue;
+          }
+
+          break;
         }
-
-        throw err;
       }
     }
+
+    throw lastError || new Error('All Gemini candidate models failed');
   }
 
   /**
@@ -329,34 +452,44 @@ You MUST return ONLY a valid JSON object matching this schema without any markdo
   }
 
   /**
+   * Remove known bulk bundle spam tokens and gibberish hashes
+   */
+  stripGibberishAndBundleWords(text) {
+    if (!text) return '';
+    return text
+      .replace(/https?:\/\/\S+/gi, '')
+      .replace(/[a-zA-Z0-9.-]+\.(com|in|org|net|io|co|store|biz)/gi, '')
+      .replace(/\b(shdushj[a-z0-9]*)\b/gi, '')
+      .replace(/\b(digiproducthub|learnbux|msrb|ybreels?)\b/gi, '')
+      .replace(/\b(reel bundle|reel bundel|reels bundle|video bundle)\b/gi, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
+
+  /**
+   * Safely truncates titles at word boundaries without leaving dangling prepositions/conjunctions
+   */
+  safeTruncateTitle(text, maxLength = 91) {
+    if (!text || text.length <= maxLength) return text;
+    let truncated = text.slice(0, maxLength);
+    const lastSpace = truncated.lastIndexOf(' ');
+    if (lastSpace > maxLength * 0.6) {
+      truncated = truncated.slice(0, lastSpace);
+    }
+    truncated = truncated
+      .replace(/[\s\-_,:|]+$/, '')
+      .replace(/\b(the|and|for|wait|with|in|on|at|of|to|is|a|an)\b$/i, '')
+      .replace(/[\s\-_,:|]+$/, '')
+      .trim();
+    return truncated;
+  }
+
+  /**
    * Deterministic rule-based heuristic metadata generator
    * 100% offline, $0 cost, supports en, hi, mr with viral hook templates
    */
   generateHeuristicMetadata(videoData, language = 'en') {
-    const rawName = (videoData.cleanTitle || videoData.originalName || '').trim();
-    const isCamera = this.isCameraOrGenericFilename(rawName);
-
-    // Clean up folder name if it's meaningful
-    const rawFolder = (videoData.folderName || '').replace(/[_-]/g, ' ').trim();
-    const isGenericFolder = !rawFolder || /^(root|drive|my drive|general|videos|test|all|media|shorts|reels)$/i.test(rawFolder);
-    const folderTopic = !isGenericFolder
-      ? rawFolder.split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
-      : null;
-
-    // Clean up title if it's human-meaningful (not camera numbers)
-    let meaningfulTitle = null;
-    if (!isCamera && rawName) {
-      const base = rawName
-        .replace(/[_-]/g, ' ')
-        .replace(/\.[^/.]+$/, '')
-        .replace(/\b(mp4|mov|avi|mkv|wmv)\b/gi, '')
-        .trim();
-      meaningfulTitle = base
-        .split(' ')
-        .filter(Boolean)
-        .map((w) => (w.length > 2 ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : w))
-        .join(' ');
-    }
+    const { cleanTopic, itemNum, cleanTitle } = extractCleanTopic(videoData);
 
     // Curated high-converting viral templates per language
     const viralPools = {
@@ -372,34 +505,32 @@ You MUST return ONLY a valid JSON object matching this schema without any markdo
           'एकदा नक्की बघा, मित्रांना लगेच शेअर करा! 💥🚀',
           'खरंच असं घडतं? शेवटचा भाग नक्की बघा! 😱✨',
           'हे कोणालाच माहीत नाही! रहस्य उघड 🤫💡',
-          'शेवटपर्यंत बघा, काय भारी आहे! 🤩🔥',
-          'हा व्हिडिओ पाहून थक्क व्हाल! 😱👀',
         ],
-        folderTitleTemplates: [
-          '{topic}: शेवटपर्यंत नक्की बघा! 😱🔥',
-          '{topic}: हा व्हिडिओ चुकवू नका! 💥🚀',
-          '{topic}: शेवटचा ट्विस्ट थक्क करेल! 🤯✨',
-          'असा {topic} व्हिडिओ कधीच पाहिला नसेल! 😍🔥',
+        topicTemplates: [
+          'हे {topic} बघून थक्क व्हाल! 😱🔥',
+          '{topic}: शेवटपर्यंत नक्की बघा, धक्का बसेल! 🤯✨',
+          '{topic}: हा व्हिडिओ अजिबात चुकवू नका! 💥🚀',
+          'असा {topic} व्हिडिओ कधीच पाहिला नसेल! 😳✨',
+          '{topic}: शेवटचा ट्विस्ट नक्की पहा! 😱🔥',
+          'थांबा! हा {topic} व्हिडिओ एकदा नक्की बघा 🤫💡',
         ],
         captions: [
-          'हे नक्की बघा! 💥\n\nहा व्हिडिओ शेवटपर्यंत पहा आणि मित्रांना शेअर करा! अशाच नवनवीन आणि व्हायरल व्हिडिओंसाठी आजच फॉलो करा.\n\nतुम्हाला हा व्हिडिओ कसा वाटला? कमेंट मध्ये नक्की सांगा! 👇',
+          'हे नक्की बघा! 💥\n\nहा {topic} व्हिडिओ शेवटपर्यंत पहा आणि मित्रांना शेअर करा! अशाच नवनवीन आणि व्हायरल व्हिडिओंसाठी आजच फॉलो करा.\n\nतुम्हाला हा व्हिडिओ कसा वाटला? कमेंट मध्ये नक्की सांगा! 👇',
           'असा व्हिडिओ पुन्हा दिसणार नाही! 👀🔥\n\nशेवटचा ट्विस्ट नक्की पहा आणि मित्रांना शेअर करा. रोज नवीन मनोरंजक व्हिडिओंसाठी पेजला फॉलो करायला विसरू नका!',
           'एकदा बघाच! 🤩✨\n\nहा व्हिडिओ तुम्हाला आवडला तर लाईक करा आणि मित्रांना पाठवा. अशाच कमाल व्हिडिओंसाठी फॉलो करा!',
-          'शेवटपर्यंत नक्की बघा! 😱💥\n\nहा व्हिडिओ पाहून नक्कीच थक्क व्हाल. अशाच भन्नाट व्हिडिओंसाठी चॅनेलला सबस्क्राईब आणि फॉलो करा!',
         ],
         hooks: [
           'एक मिनिट थांबा! हा व्हिडिओ चुकवू नका...',
           'शेवटपर्यंत बघा, शेवटचा ट्विस्ट पाहून धक्का बसेल!',
           'तुम्ही कधी असं काही पाहिलंय का?',
           'थांबा! हे पाहिल्याशिवाय पुढे जाऊ नका...',
-          'हा व्हिडिओ पाहून तुमचा दिवस बनेल!',
         ],
         ctas: [
           'नवीन आणि व्हायरल व्हिडिओंसाठी लाईक आणि फॉलो करा!',
           'अशाच रोज नवीन व्हिडिओंसाठी आताच फॉलो करा!',
           'व्हिडिओ आवडल्यास मित्रांना शेअर करा आणि सबस्क्राईब करा!',
         ],
-        hashtags: ['#Shorts', '#Reels', '#MarathiReels', '#Trending', '#Maharashtra', '#ViralReels', '#MarathiKida'],
+        hashtags: ['#Shorts', '#Reels', '#MarathiReels', '#Trending', '#Maharashtra', '#ViralReels'],
         category: 'Entertainment',
       },
       hi: {
@@ -412,18 +543,17 @@ You MUST return ONLY a valid JSON object matching this schema without any markdo
           'हंस-हंस कर लोटपोट हो जाओगे! 😂💀',
           'ये सच है या मज़ाक? खुद ही देख लो! 😱🚀',
           'सबके होश उड़ा देने वाला वीडियो! 💥🔥',
-          'इसने तो सबका दिल जीत लिया! 😍✨',
-          'ये सीक्रेट कोई नहीं बताएगा! 🤫💡',
-          'लास्ट का सीन मिस मत करना! 😱👀',
-          'देखकर आप भी हैरान रह जाओगे! 🤯🔥',
         ],
-        folderTitleTemplates: [
-          '{topic} | लास्ट तक ज़रूर देखना! 😱🔥',
+        topicTemplates: [
+          '{topic} देखकर होश उड़ जाएंगे! 😱🔥',
+          'लास्ट तक ज़रूर देखना, {topic} का ट्विस्ट! 🤯✨',
           '{topic} का सबसे धमाकेदार वीडियो! 💥🚀',
-          '{topic} का यह वीडियो देखकर चौंक जाओगे! 🤯✨',
+          'रुको! यह {topic} देखे बिना आगे मत बढ़ना... 🤫👀',
+          '{topic} देखकर आप भी हैरान रह जाओगे! 🤯🔥',
+          'ऐसा {topic} वीडियो कभी नहीं देखा होगा! 😍✨',
         ],
         captions: [
-          'क्या आपने यह देखा? 👀🔥\n\nयह वीडियो अंत तक देखें और अपनी राय कमेंट में बताएं! ऐसे और बेहतरीन और वायरल वीडियो देखने के लिए हमें अभी फॉलो करें।',
+          'क्या आपने यह देखा? 👀🔥\n\nयह {topic} वीडियो अंत तक देखें और अपनी राय कमेंट में बताएं! ऐसे और बेहतरीन और वायरल वीडियो देखने के लिए हमें अभी फॉलो करें।',
           'लास्ट का ट्विस्ट मिस मत करना! 😱✨\n\nअगर वीडियो पसंद आए तो लाइक करें और दोस्तों के साथ शेयर करें। रोज़ाना ऐसे ही नए वीडियो के लिए अभी फॉलो करें!',
           'यह वीडियो सच में कमाल है! 😍🔥\n\nपूरा वीडियो देखें और अपने विचार नीचे कमेंट्स में शेयर करें। चैनल को सब्सक्राइब करना न भूलें!',
         ],
@@ -438,7 +568,7 @@ You MUST return ONLY a valid JSON object matching this schema without any markdo
           'डेली रील्स और शॉर्ट्स के लिए अभी फॉलो करें!',
           'वीडियो पसंद आए तो शेयर और फॉलो ज़रूर करें!',
         ],
-        hashtags: ['#Shorts', '#Reels', '#Trending', '#HindiReels', '#ViralVideo', '#ShortsFeed', '#Viral'],
+        hashtags: ['#Shorts', '#Reels', '#Trending', '#HindiReels', '#ViralVideo', '#ShortsFeed'],
         category: 'Entertainment',
       },
       en: {
@@ -449,20 +579,19 @@ You MUST return ONLY a valid JSON object matching this schema without any markdo
           'Watch Till The End For The Twist! 😱🔥',
           'Nobody Expected This To Happen! 🤯💀',
           'Top Secret You Wish You Knew Sooner! 🤫💡',
-          'Try Not To Laugh Challenge! 😂🔥',
           'Wait For It... Instant Shock! 😱🚀',
-          'This Changed Everything! 🚀💡',
           'Most Satisfying Video Ever! 😍✨',
-          'Can You Believe This Really Happened?! 🤯🔥',
-          'Wait For The Unexpected Twist! 😳👀',
         ],
-        folderTitleTemplates: [
-          '{topic} | Wait Till The End! 😱🔥',
-          'Unbelievable {topic} Moment You Must See! 🤯✨',
-          'Best {topic} Video On The Internet! 🚀🔥',
+        topicTemplates: [
+          'Mind-Blowing {topic} You Won\'t Believe! 🤯',
+          'Unbelievable {topic} | Wait Till The End! 😱🔥',
+          '{topic}: This Just Blew My Mind! 💥👀',
+          'Crazy {topic} Moment You Must Watch! 🚀✨',
+          'Top Secret {topic} Nobody Knows! 🤫💡',
+          'Best {topic} Video On The Internet! 🔥',
         ],
         captions: [
-          'Wait until you see this! 👀🔥\n\nWatch till the end and let us know your thoughts in the comments. Don\'t forget to share with a friend who needs to see this!\n\nFollow for more daily viral videos!',
+          'Wait until you see this! 👀🔥\n\nWatch this amazing {topic} reel till the very end and let us know your thoughts in the comments. Don\'t forget to share with a friend who needs to see this!\n\nFollow for more daily viral videos!',
           'The twist at the end is unbelievable! 🤯💥\n\nHit like if this blew your mind, and drop a comment below. Follow for daily trending reels!',
           'You won\'t believe this actually happened! 😱✨\n\nDouble tap if you loved it and make sure to share it with your friends. Follow for daily shorts!',
         ],
@@ -477,7 +606,7 @@ You MUST return ONLY a valid JSON object matching this schema without any markdo
           'Follow for daily entertaining reels and shorts!',
           'Double tap if you liked this and follow for more!',
         ],
-        hashtags: ['#Shorts', '#Reels', '#Viral', '#Trending', '#ShortsFeed', '#ViralShorts', '#ExplorePage'],
+        hashtags: ['#Shorts', '#Reels', '#Viral', '#Trending', '#ShortsFeed', '#ViralShorts'],
         category: 'Entertainment',
       },
     };
@@ -486,29 +615,29 @@ You MUST return ONLY a valid JSON object matching this schema without any markdo
     const rand = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
     let chosenTitle = '';
-    if (meaningfulTitle) {
-      if (language === 'mr') chosenTitle = `${meaningfulTitle} - नक्की बघा! 🚀`;
-      else if (language === 'hi') chosenTitle = `${meaningfulTitle} - ज़रूर देखें! 🚀`;
-      else chosenTitle = `${meaningfulTitle} - Wait For The End! 🚀`;
-    } else if (folderTopic && Math.random() > 0.4) {
-      const template = rand(pool.folderTitleTemplates);
-      chosenTitle = template.replace('{topic}', folderTopic);
+    const hasSpecificTopic = cleanTopic && cleanTopic !== 'Trending Reel' && cleanTopic.length >= 2;
+
+    if (hasSpecificTopic) {
+      const template = rand(pool.topicTemplates);
+      chosenTitle = template.replace(/\{topic\}/g, cleanTopic);
     } else {
       chosenTitle = rand(pool.titles);
     }
 
-    const chosenCaption = rand(pool.captions);
+    const chosenCaption = rand(pool.captions).replace(/\{topic\}/g, cleanTopic);
     const chosenHook = rand(pool.hooks);
     const chosenCta = rand(pool.ctas);
 
     const tags = pool.hashtags.map((h) => h.replace('#', '').toLowerCase());
-    if (folderTopic) tags.unshift(folderTopic.toLowerCase());
+    if (hasSpecificTopic) {
+      tags.unshift(cleanTopic.toLowerCase());
+    }
 
     return {
       youtubeTitle: chosenTitle,
       instagramCaption: chosenCaption,
       hook: chosenHook,
-      description: meaningfulTitle ? `${meaningfulTitle} - Watch till the end!` : chosenHook,
+      description: hasSpecificTopic ? `${cleanTopic} - Watch till the end! Like and share.` : chosenHook,
       cta: chosenCta,
       hashtags: pool.hashtags,
       tags,
@@ -525,12 +654,15 @@ You MUST return ONLY a valid JSON object matching this schema without any markdo
   validateAndSanitizeMetadata(raw, language = 'en') {
     // 1. YouTube Shorts Title: Max 100 characters, single line
     let ytTitle = (raw.youtubeTitle || raw.title || 'Must Watch Short').replace(/[\r\n]+/g, ' ').trim();
+    ytTitle = this.stripGibberishAndBundleWords(ytTitle);
+
     if (!ytTitle.toLowerCase().includes('#shorts')) {
-      if (ytTitle.length <= 91) {
-        ytTitle = `${ytTitle} #Shorts`;
-      } else {
-        ytTitle = `${ytTitle.slice(0, 91).trim()} #Shorts`;
-      }
+      const truncated = this.safeTruncateTitle(ytTitle, 91);
+      ytTitle = `${truncated} #Shorts`;
+    } else if (ytTitle.length > 100) {
+      const withoutShorts = ytTitle.replace(/#shorts/gi, '').trim();
+      const truncated = this.safeTruncateTitle(withoutShorts, 91);
+      ytTitle = `${truncated} #Shorts`;
     }
     if (ytTitle.length > 100) {
       ytTitle = `${ytTitle.slice(0, 91).trim()} #Shorts`;
@@ -538,6 +670,7 @@ You MUST return ONLY a valid JSON object matching this schema without any markdo
 
     // 2. Instagram Reel Caption: Max 2200 characters
     let igCaption = (raw.instagramCaption || raw.description || ytTitle).trim();
+    igCaption = this.stripGibberishAndBundleWords(igCaption);
     if (raw.cta && !igCaption.includes(raw.cta)) {
       igCaption = `${igCaption}\n\n👉 ${raw.cta}`;
     }
@@ -546,10 +679,10 @@ You MUST return ONLY a valid JSON object matching this schema without any markdo
     }
 
     // 3. Opening Hook: 1-2 punchy lines
-    const hook = (raw.hook || 'Watch this...').replace(/[\r\n]+/g, ' ').slice(0, 200).trim();
+    const hook = this.stripGibberishAndBundleWords(raw.hook || 'Watch this...').replace(/[\r\n]+/g, ' ').slice(0, 200).trim();
 
     // 4. Description: Core 1-2 sentences
-    const description = (raw.description || igCaption.slice(0, 150)).trim();
+    const description = this.stripGibberishAndBundleWords(raw.description || igCaption.slice(0, 150)).trim();
 
     // 5. CTA
     const cta = (raw.cta || 'Follow and subscribe for more!').replace(/[\r\n]+/g, ' ').slice(0, 150).trim();

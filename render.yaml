@@ -24,13 +24,15 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
-        value: gemini-flash-latest
+        value: gemini-3.5-flash-lite
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
       - key: GOOGLE_REDIRECT_URI
         sync: false # Set to deployed Backend Callback: https://autoreel-ai-2.onrender.com/api/accounts/google/callback
+      - key: DRIVE_TRANSFER_REDIRECT_URI
+        sync: false # Optional: https://autoreel-ai-2.onrender.com/api/drive-transfer/oauth/callback (or omit to share GOOGLE_REDIRECT_URI)
       - key: META_APP_ID
         sync: false
       - key: META_APP_SECRET

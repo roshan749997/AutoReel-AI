@@ -5,9 +5,10 @@ let isConnected = false;
 let connectionError = null;
 let isConnecting = false;
 let reconnectTimer = null;
+let isShuttingDown = false;
 
 const scheduleReconnect = (delayMs = 3000) => {
-  if (reconnectTimer || isConnecting || mongoose.connection.readyState === 1) return;
+  if (isShuttingDown || reconnectTimer || isConnecting || mongoose.connection.readyState === 1) return;
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null;
     if (mongoose.connection.readyState !== 1) {
@@ -70,8 +71,10 @@ mongoose.connection.on('error', (err) => {
 
 mongoose.connection.on('disconnected', () => {
   isConnected = false;
-  console.warn('[Database] MongoDB connection lost. Attempting automatic reconnection...');
-  scheduleReconnect(2000);
+  if (!isShuttingDown) {
+    console.warn('[Database] MongoDB connection lost. Attempting automatic reconnection...');
+    scheduleReconnect(2000);
+  }
 });
 
 mongoose.connection.on('reconnected', () => {
@@ -98,6 +101,11 @@ export const getDatabaseStatus = () => {
 };
 
 export const closeDatabase = async () => {
+  isShuttingDown = true;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   if (mongoose.connection.readyState !== 0) {
     await mongoose.connection.close(false);
     console.log('[Database] MongoDB connection closed');

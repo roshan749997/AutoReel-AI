@@ -2,8 +2,9 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { aiService } from '../services/aiService.js';
+import { aiService, extractCleanTopic } from '../services/aiService.js';
 import { Video } from '../models/Video.js';
+import { Post } from '../models/Post.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { config } from '../config/env.js';
 
@@ -93,6 +94,7 @@ router.post('/generate', async (req, res, next) => {
         originalName: video.originalName,
         cleanTitle: video.cleanTitle || video.originalName,
         folderName: video.folderName,
+        folderPathNames: video.folderPathNames,
         duration: video.duration,
         notes: notes || video.notes,
         language: language || video.aiMetadata?.language || 'en',
@@ -252,6 +254,92 @@ router.patch('/draft/:videoId', async (req, res, next) => {
         aiMetadata: video.aiMetadata,
         status: video.status,
       },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 4. Batch repair corrupt/gibberish bundle titles in database
+router.post('/repair-titles', async (req, res, next) => {
+  try {
+    const { dryRun = false, limit = 500 } = req.body || {};
+
+    const query = {
+      $or: [
+        { cleanTitle: /shdushj/i },
+        { cleanTitle: /reel bundle/i },
+        { cleanTitle: /digiproducthub/i },
+        { 'aiMetadata.youtubeTitle': /Wait For The #Shorts/i },
+        { 'aiMetadata.youtubeTitle': /shdushj/i },
+      ],
+    };
+
+    const videos = await Video.find(query).limit(Number(limit) || 500);
+    const results = [];
+    let postsUpdated = 0;
+
+    for (const v of videos) {
+      const cleanMeta = extractCleanTopic({
+        originalName: v.originalName,
+        folderName: v.folderName,
+        folderPathNames: v.folderPathNames,
+      });
+
+      const oldClean = v.cleanTitle;
+      const oldAiTitle = v.aiMetadata?.youtubeTitle;
+
+      if (!dryRun) {
+        v.cleanTitle = cleanMeta.cleanTitle;
+        if (v.aiMetadata?.youtubeTitle) {
+          const newMeta = await aiService.generateMetadata({
+            originalName: v.originalName,
+            cleanTitle: cleanMeta.cleanTitle,
+            folderName: v.folderName,
+            folderPathNames: v.folderPathNames,
+            duration: v.duration,
+            language: v.aiMetadata?.language || 'en',
+          });
+
+          v.aiMetadata.youtubeTitle = newMeta.youtubeTitle;
+          v.aiMetadata.generatedTitle = newMeta.youtubeTitle;
+          v.aiMetadata.instagramCaption = newMeta.instagramCaption;
+          v.aiMetadata.description = newMeta.description;
+          v.aiMetadata.hook = newMeta.hook;
+          v.aiMetadata.cta = newMeta.cta;
+          v.aiMetadata.hashtags = newMeta.hashtags;
+          v.aiMetadata.tags = newMeta.tags;
+          v.aiMetadata.lastEditedAt = new Date();
+        }
+        await v.save();
+
+        // Also update any scheduled/failed posts referencing this video
+        const postRes = await Post.updateMany(
+          { videoId: v._id, title: /shdushj|Wait For The/i },
+          {
+            $set: {
+              title: v.aiMetadata?.youtubeTitle || cleanMeta.cleanTitle,
+              caption: v.aiMetadata?.instagramCaption || undefined,
+            },
+          }
+        );
+        postsUpdated += postRes.modifiedCount || 0;
+      }
+
+      results.push({
+        id: v._id,
+        before: { cleanTitle: oldClean, aiTitle: oldAiTitle },
+        after: { cleanTitle: cleanMeta.cleanTitle, aiTitle: v.aiMetadata?.youtubeTitle },
+      });
+    }
+
+    res.json({
+      status: 'success',
+      dryRun,
+      totalFound: videos.length,
+      repairedVideos: results.length,
+      postsUpdated,
+      sampleRepairs: results.slice(0, 5),
     });
   } catch (err) {
     next(err);

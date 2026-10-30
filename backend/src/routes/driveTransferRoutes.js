@@ -61,7 +61,8 @@ router.get('/oauth/callback', async (req, res) => {
     if (!req.query.code) {
       return back(`dt_status=error&dt_error=${encodeURIComponent('Missing authorization code.')}`);
     }
-    await exchangeAuthCode(req.query.code);
+    const callbackUrl = process.env.DRIVE_TRANSFER_REDIRECT_URI || `${req.protocol}://${req.get('host')}/api/drive-transfer/oauth/callback`;
+    await exchangeAuthCode(req.query.code, callbackUrl);
     return back('dt_status=connected');
   } catch (err) {
     return back(`dt_status=error&dt_error=${encodeURIComponent(err.message || 'Drive Transfer sign-in failed')}`);
