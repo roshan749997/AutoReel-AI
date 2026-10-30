@@ -203,16 +203,32 @@ router.post(
       const allCreatedPosts = [];
       const allErrors = [];
 
-      // 1. Preload all referenced accounts in a single query to eliminate N+1 DB lookups
+      // 1. Preload all referenced accounts, videos, and existing active posts in batch queries
       const allAccountIds = new Set();
+      const allVideoIds = new Set();
       for (const item of items) {
+        if (item.videoId) allVideoIds.add(String(item.videoId));
         const targets = item.targets || item.platforms || [];
         for (const t of targets) {
           if (t.accountId) allAccountIds.add(String(t.accountId));
         }
       }
-      const accountsList = await Account.find({ _id: { $in: Array.from(allAccountIds) } }).lean();
+
+      const [accountsList, videosList, existingActivePosts] = await Promise.all([
+        Account.find({ _id: { $in: Array.from(allAccountIds) } }),
+        Video.find({ _id: { $in: Array.from(allVideoIds) } }),
+        Post.find({
+          videoId: { $in: Array.from(allVideoIds) },
+          accountId: { $in: Array.from(allAccountIds) },
+          status: { $in: ['scheduled', 'queued', 'processing', 'retrying', 'published', 'manual_review'] },
+        }).lean(),
+      ]);
+
       const accountMap = new Map(accountsList.map((a) => [String(a._id), a]));
+      const videoMap = new Map(videosList.map((v) => [String(v._id), v]));
+      const existingPostMap = new Map(
+        existingActivePosts.map((p) => [`${p.videoId}_${p.accountId}`, p])
+      );
 
       // 2. Helper to process a single video item
       const processItem = async (item) => {
@@ -238,42 +254,18 @@ router.post(
           return;
         }
 
-        // If autoApprove is set, ensure video metadata is approved
-        if (autoApprove) {
-          try {
-            const video = await Video.findById(videoId);
-            if (video && video.aiMetadata?.approvalStatus !== 'approved') {
-              if (!video.aiMetadata) video.aiMetadata = {};
-              video.aiMetadata.approvalStatus = 'approved';
-              video.aiMetadata.approvedAt = new Date();
-              if (title) {
-                video.aiMetadata.youtubeTitle = title;
-                video.aiMetadata.generatedTitle = title;
-              }
-              if (caption) video.aiMetadata.instagramCaption = caption;
-              if (hashtags) {
-                video.aiMetadata.hashtags = Array.isArray(hashtags)
-                  ? hashtags
-                  : String(hashtags).split(/[\s,]+/).filter(Boolean);
-              }
-              await video.save();
-            }
-          } catch {
-            // Non-blocking metadata sync
-          }
-        }
+        const preloadedVid = videoMap.get(String(videoId));
 
         const itemCreated = [];
         const itemErrors = [];
 
         for (const target of rawTargets) {
           try {
-            let targetPlatform = target.platform;
-            if (!targetPlatform) {
-              const acc = accountMap.get(String(target.accountId));
-              if (!acc) throw new Error(`Account ${target.accountId} not found`);
-              targetPlatform = acc.platform;
-            }
+            const acc = accountMap.get(String(target.accountId));
+            const targetPlatform = target.platform || acc?.platform;
+            if (!acc) throw new Error(`Account ${target.accountId} not found`);
+
+            const existingPost = existingPostMap.get(`${videoId}_${target.accountId}`);
 
             const post = await schedulerService.schedulePost({
               videoId,
@@ -286,10 +278,14 @@ router.post(
               timezone,
               allowDuplicate: target.allowDuplicate !== undefined ? Boolean(target.allowDuplicate) : Boolean(allowDuplicate),
               autoApprove,
+              preloadedVideo: preloadedVid,
+              preloadedAccount: acc,
+              preloadedExistingPost: existingPost,
             });
 
             itemCreated.push(post);
             allCreatedPosts.push(post);
+            existingPostMap.set(`${videoId}_${target.accountId}`, post);
           } catch (err) {
             const errObj = {
               videoId,
@@ -309,8 +305,8 @@ router.post(
         });
       };
 
-      // 3. Process items in concurrency chunks of 5
-      const CHUNK_SIZE = 5;
+      // 3. Process items in concurrency chunks of 25 (ultra-fast in-memory validation)
+      const CHUNK_SIZE = 25;
       for (let i = 0; i < items.length; i += CHUNK_SIZE) {
         const chunk = items.slice(i, i + CHUNK_SIZE);
         await Promise.all(chunk.map((item) => processItem(item)));

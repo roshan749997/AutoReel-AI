@@ -42,8 +42,14 @@ async function request(endpoint, options = {}) {
 
     return data;
   } catch (err) {
-    if (err.name === 'AbortError') {
+    if (err.name === 'AbortError' || (err.message && err.message.includes('aborted'))) {
       console.warn(`[API Client Timeout] Request to ${endpoint} timed out after ${timeoutMs}ms`);
+      const timeoutErr = new Error(
+        `Request timed out after ${Math.round(timeoutMs / 1000)}s. Large batches continue processing in the background on the server.`
+      );
+      timeoutErr.name = 'TimeoutError';
+      timeoutErr.isTimeout = true;
+      throw timeoutErr;
     } else {
       console.error(`[API Client Error] ${endpoint}:`, err.message);
     }

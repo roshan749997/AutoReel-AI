@@ -1124,6 +1124,15 @@ export const VideoLibraryModule = ({
         setBatchScheduleModalOpen(false);
         setSelectedVideoIds([]);
         if (onReload) onReload();
+      } else if (err.isTimeout || err.name === 'TimeoutError' || (err.message && err.message.includes('timed out'))) {
+        alert(
+          `Batch Schedule Notice: Processing in progress!\n\n` +
+          `Scheduling hundreds of videos takes a moment. The server is continuing to process them in the background.\n\n` +
+          `Check the "Publishing Queue" tab in a moment to see your queued posts.`
+        );
+        setBatchScheduleModalOpen(false);
+        setSelectedVideoIds([]);
+        if (onReload) onReload();
       } else {
         const errorSummary = errors.length > 0
           ? `\n\nDetails:\n` + errors.slice(0, 4).map((e) => `• ${e.error}`).join('\n')

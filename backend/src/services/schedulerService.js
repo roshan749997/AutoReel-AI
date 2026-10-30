@@ -128,9 +128,12 @@ export class SchedulerService {
     timezone = 'UTC',
     allowDuplicate = false,
     autoApprove = false,
+    preloadedVideo = null,
+    preloadedAccount = null,
+    preloadedExistingPost = undefined,
   }) {
     // 1. Fetch & validate referenced video
-    const video = await Video.findById(videoId);
+    const video = preloadedVideo || (await Video.findById(videoId));
     if (!video) {
       const err = new Error('Referenced video record not found');
       err.statusCode = 404;
@@ -166,7 +169,7 @@ export class SchedulerService {
     }
 
     // 2. Fetch & validate referenced social account
-    const account = await Account.findById(accountId);
+    const account = preloadedAccount || (await Account.findById(accountId));
     if (!account) {
       const err = new Error('Target social account not found');
       err.statusCode = 404;
@@ -213,11 +216,14 @@ export class SchedulerService {
 
     // 4. Duplicate schedule prevention for same video and account
     if (!allowDuplicate) {
-      const existingPost = await Post.findOne({
-        videoId,
-        accountId,
-        status: { $in: ['scheduled', 'queued', 'processing', 'retrying', 'published', 'manual_review'] },
-      });
+      const existingPost =
+        preloadedExistingPost !== undefined
+          ? preloadedExistingPost
+          : await Post.findOne({
+              videoId,
+              accountId,
+              status: { $in: ['scheduled', 'queued', 'processing', 'retrying', 'published', 'manual_review'] },
+            });
 
       if (existingPost) {
         const isPublished = existingPost.status === 'published';
