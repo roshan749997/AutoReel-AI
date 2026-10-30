@@ -29,3 +29,4 @@ jobs:
           echo "Pinging AutoReel Frontend (https://autoreel-ai-1.onrender.com)..."
           STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 45 https://autoreel-ai-1.onrender.com)
           echo "Frontend returned HTTP Status: $STATUS_CODE"
+
