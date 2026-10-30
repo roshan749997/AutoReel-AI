@@ -411,6 +411,32 @@ router.post('/:id/cancel', async (req, res, next) => {
   }
 });
 
+// 9.5 Retry all failed posts in queue
+router.post('/retry-all-failed', async (req, res, next) => {
+  try {
+    const failedPosts = await Post.find({ status: 'failed' });
+    let retriedCount = 0;
+    const errors = [];
+
+    for (const post of failedPosts) {
+      try {
+        await schedulerService.retryPost(post._id);
+        retriedCount++;
+      } catch (err) {
+        errors.push({ id: post._id, error: err.message });
+      }
+    }
+
+    res.json({
+      status: 'success',
+      message: `Reset ${retriedCount} of ${failedPosts.length} failed post(s) for retry.`,
+      data: { retriedCount, totalFailed: failedPosts.length, errors },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // 10. Retry a failed/cancelled post
 router.post('/:id/retry', async (req, res, next) => {
   try {

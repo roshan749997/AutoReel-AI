@@ -27,7 +27,7 @@ const navItems = [
   { id: 'drive-transfer', label: 'Drive Transfer', icon: FolderInput },
 ];
 
-export const Sidebar = ({ activeTab, onSelectTab, isMobileOpen, onCloseMobile, systemStatus }) => {
+export const Sidebar = ({ activeTab, onSelectTab, isMobileOpen, onCloseMobile, systemStatus, failedPostsCount = 0 }) => {
   return (
     <>
       {/* Mobile backdrop */}
@@ -76,11 +76,15 @@ export const Sidebar = ({ activeTab, onSelectTab, isMobileOpen, onCloseMobile, s
                   <Icon className={`w-4 h-4 ${isActive ? 'text-indigo-600' : 'text-slate-500'}`} />
                   <span>{item.label}</span>
                 </div>
-                {item.badge && (
+                {item.id === 'queue' && failedPostsCount > 0 ? (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-500 text-white animate-pulse shadow-sm">
+                    {failedPostsCount} Failed
+                  </span>
+                ) : item.badge ? (
                   <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-500 border border-slate-200">
                     {item.badge}
                   </span>
-                )}
+                ) : null}
               </button>
             );
           })}

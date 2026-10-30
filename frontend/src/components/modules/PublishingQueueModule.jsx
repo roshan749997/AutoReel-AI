@@ -32,7 +32,6 @@ import { channelTitle, findPairForPost } from '../../utils/channelPairs.js';
 
 export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onNavigate }) => {
   const [filterStatus, setFilterStatus] = useState('upcoming');
-  const [showUnlinked, setShowUnlinked] = useState(false);
   const [accountFilter, setAccountFilter] = useState('all');
   const [channelFilter, setChannelFilter] = useState('');
   const [channelPairs, setChannelPairs] = useState([]);
@@ -67,7 +66,10 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
     };
   }, []);
 
-  const upcomingStatuses = ['scheduled', 'queued', 'processing', 'retrying', 'paused'];
+  const upcomingStatuses = ['scheduled', 'queued', 'processing', 'retrying', 'paused', 'failed'];
+  const failedPosts = posts.filter((p) => p.status === 'failed');
+  const failedCount = failedPosts.length;
+
   const statusLabels = {
     upcoming: 'To publish',
     all: 'All',
@@ -161,6 +163,20 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
       alert('Post reset for queue processing.');
     } catch (err) {
       alert(`Retry error: ${err.message}`);
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  const handleRetryAllFailed = async () => {
+    if (!window.confirm(`Retry all ${failedCount} failed post(s) now?`)) return;
+    try {
+      setIsActionLoading(true);
+      const res = await api.retryAllFailed();
+      alert(res.message || 'All failed posts reset for retry.');
+      if (onReload) onReload();
+    } catch (err) {
+      alert(`Retry all failed error: ${err.message}`);
     } finally {
       setIsActionLoading(false);
     }
@@ -293,6 +309,47 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
 
   return (
     <div className="space-y-6">
+      {/* 0. Prominent Failed Posts Alert Banner */}
+      {failedCount > 0 && (
+        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-rose-900 shadow-sm animate-fadeIn">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-lg bg-rose-100 flex items-center justify-center shrink-0 text-rose-600 mt-0.5 sm:mt-0">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-rose-900 flex items-center gap-2">
+                {failedCount} Post{failedCount > 1 ? 's' : ''} Failed to Publish
+                <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-rose-200 text-rose-800">
+                  Visible in Queue
+                </span>
+              </h4>
+              <p className="text-xs text-rose-700 mt-0.5">
+                These posts encountered an API or video upload error. They are kept visible below so you can review the failure message and retry them.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
+            <button
+              type="button"
+              onClick={() => setFilterStatus('failed')}
+              className="text-xs px-3 py-1.5 rounded-lg border border-rose-300 text-rose-800 bg-white hover:bg-rose-100 font-medium transition-colors cursor-pointer"
+            >
+              Filter Failed ({failedCount})
+            </button>
+            <Button
+              variant="primary"
+              size="sm"
+              icon={RotateCcw}
+              isLoading={isActionLoading}
+              onClick={handleRetryAllFailed}
+              className="text-xs py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold"
+            >
+              Retry All ({failedCount})
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* 1. Queue Overview & Filter Tabs */}
       <Card>
         <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
@@ -328,17 +385,34 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
                   if (id === 'upcoming') return upcomingStatuses.includes(post.status);
                   return post.status === id;
                 }).length;
+                const isFailedTab = id === 'failed';
+                const hasFailed = isFailedTab && count > 0;
                 return (
                   <button
                     key={id}
                     onClick={() => setFilterStatus(id)}
-                    className={`px-2 py-1 rounded-md font-medium text-[11px] transition-colors whitespace-nowrap ${
+                    className={`px-2.5 py-1 rounded-md font-medium text-[11px] transition-colors whitespace-nowrap flex items-center gap-1.5 ${
                       filterStatus === id
-                        ? 'bg-indigo-600 text-white shadow-sm'
-                        : 'text-slate-400 hover:text-slate-800 hover:bg-slate-850'
+                        ? isFailedTab
+                          ? 'bg-rose-600 text-white shadow-sm'
+                          : 'bg-indigo-600 text-white shadow-sm'
+                        : hasFailed
+                        ? 'bg-rose-100 text-rose-800 border border-rose-300 hover:bg-rose-200 font-bold'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
                     }`}
                   >
-                    {label} {count}
+                    <span>{label}</span>
+                    <span
+                      className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                        filterStatus === id
+                          ? 'bg-white/20 text-white font-bold'
+                          : hasFailed
+                          ? 'bg-rose-600 text-white font-bold'
+                          : 'bg-slate-200 text-slate-700'
+                      }`}
+                    >
+                      {count}
+                    </span>
                   </button>
                 );
               })}
@@ -400,7 +474,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
           />
         ) : (
           <div className="space-y-6">
-            {accountGroups.filter((group) => group.name !== 'No channel linked').map((group) => (
+            {accountGroups.map((group) => (
               <section key={group.id} className="space-y-3">
                 <div className="flex items-center justify-between gap-3 px-1">
                   <div className="flex items-center gap-2 min-w-0">
@@ -440,13 +514,19 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
               return (
                 <div
                   key={post._id}
-                  className="p-4 rounded-xl bg-slate-50/40 border border-slate-200/80 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 hover:border-slate-300/80 transition-colors"
+                  className={`p-4 rounded-xl border flex flex-col md:flex-row items-start md:items-center justify-between gap-4 transition-colors ${
+                    isFailed
+                      ? 'bg-rose-50/50 border-rose-300 shadow-sm hover:border-rose-400'
+                      : 'bg-slate-50/40 border-slate-200/80 hover:border-slate-300/80'
+                  }`}
                 >
                   {/* Left: Platform & Post Details */}
                   <div className="flex items-start gap-3.5 flex-1 min-w-0">
                     <div
                       className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
-                        isYt
+                        isFailed
+                          ? 'bg-rose-100 text-rose-600 border-rose-300'
+                          : isYt
                           ? 'bg-red-500/10 text-red-400 border-red-500/20'
                           : 'bg-pink-500/10 text-pink-400 border-pink-500/20'
                       }`}
@@ -480,17 +560,20 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
                         {post.attempts > 0 && <span>Try {post.attempts} of {post.maxAttempts || 3}</span>}
 
                         {post.nextRetryAt && (
-                          <span className="text-amber-400 font-mono text-[10px]">
+                          <span className="text-amber-500 font-mono text-[10px]">
                             Next Retry: {new Date(post.nextRetryAt).toLocaleTimeString()}
                           </span>
                         )}
                       </div>
 
                       {post.lastError && (
-                        <p className="text-[11px] text-rose-400 mt-1.5 flex items-center gap-1 font-mono">
-                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                          {post.lastError.message}
-                        </p>
+                        <div className="text-[11px] text-rose-800 mt-2 p-2 rounded-lg bg-rose-50 border border-rose-200 flex items-start gap-1.5 font-mono">
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-rose-500 mt-0.5" />
+                          <div className="flex-1 break-all">
+                            <span className="font-semibold text-rose-900">Failure Reason: </span>
+                            {post.lastError.message}
+                          </div>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -584,7 +667,12 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
                         icon={RotateCcw}
                         isLoading={isActionLoading}
                         onClick={() => handleRetry(post._id)}
-                        className="text-xs py-1 text-indigo-400"
+                        className={`text-xs py-1 ${
+                          isFailed
+                            ? 'text-rose-700 bg-rose-50 border-rose-300 hover:bg-rose-100 font-semibold'
+                            : 'text-indigo-600 hover:text-indigo-700'
+                        }`}
+                        title="Retry this post now"
                       >
                         Retry
                       </Button>
@@ -634,24 +722,6 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
             })}
               </section>
             ))}
-            {accountGroups.some((group) => group.name === 'No channel linked') && (
-              <section className="space-y-3">
-                <button
-                  type="button"
-                  onClick={() => setShowUnlinked((open) => !open)}
-                  className="text-xs text-slate-400 hover:text-slate-800"
-                >
-                  {showUnlinked ? 'Hide' : 'Show'} {accountGroups.find((group) => group.name === 'No channel linked')?.posts.length || 0} old posts with no channel
-                </button>
-                {showUnlinked && accountGroups.find((group) => group.name === 'No channel linked')?.posts.map((post) => (
-                  <div key={post._id} className="p-3 rounded-lg border border-slate-200 text-xs text-slate-400">
-                    <span className="text-slate-800">{post.videoId?.originalName || post.title}</span>
-                    <span className="ml-2 capitalize">{post.platform}</span>
-                    <span className="ml-2">{post.status}</span>
-                  </div>
-                ))}
-              </section>
-            )}
           </div>
         )}
       </Card>

@@ -149,11 +149,14 @@ export default function App() {
     aiProvider: integrations?.ai?.provider || 'Gemini',
   };
 
+  const failedPostsCount = posts.filter((p) => p.status === 'failed').length;
+
   const stats = {
     indexedVideos: checklist?.stats?.indexedVideos ?? videos.length,
     connectedAccounts: accounts.length,
     queuedPosts: posts.filter((p) => p.status === 'queued').length,
     publishedPosts: posts.filter((p) => p.status === 'published').length,
+    failedPosts: failedPostsCount,
   };
 
   return (
@@ -165,6 +168,7 @@ export default function App() {
         isMobileOpen={isMobileOpen}
         onCloseMobile={() => setIsMobileOpen(false)}
         systemStatus={systemStatus}
+        failedPostsCount={failedPostsCount}
       />
 
       {/* Main Content Area */}

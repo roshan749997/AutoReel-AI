@@ -148,6 +148,7 @@ export const api = {
   reschedulePost: (id, data) => request(`/posts/${id}/reschedule`, { method: 'POST', body: data }),
   cancelPost: (id, reason) => request(`/posts/${id}/cancel`, { method: 'POST', body: { reason } }),
   retryPost: (id) => request(`/posts/${id}/retry`, { method: 'POST' }),
+  retryAllFailed: () => request('/posts/retry-all-failed', { method: 'POST' }),
   publishNow: (id) => request(`/posts/${id}/publish-now`, { method: 'POST' }),
   deletePost: (id) => request(`/posts/${id}`, { method: 'DELETE' }),
   purgePosts: (params = {}) => {
