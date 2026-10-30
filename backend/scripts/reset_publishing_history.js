@@ -33,9 +33,15 @@ export async function resetPublishingHistory({ dryRun = true } = {}) {
   const logResult = await WorkflowLog.deleteMany({});
   console.log(`  ✔ Deleted ${logResult.deletedCount} workflow logs.`);
 
-  // 3. Reset video statuses back to metadata_ready (if AI metadata exists) or discovered
+  // 3. Reset video statuses back to metadata_ready (only for videos that were never actually published to social channels)
   const videoResult = await Video.updateMany(
-    { status: { $in: ['queued', 'published'] } },
+    {
+      status: { $in: ['queued', 'published'] },
+      $or: [
+        { publishedPlatforms: { $exists: false } },
+        { publishedPlatforms: { $size: 0 } },
+      ],
+    },
     [
       {
         $set: {

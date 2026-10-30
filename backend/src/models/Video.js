@@ -101,6 +101,15 @@ const videoSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    publishedPlatforms: [
+      {
+        platform: { type: String, enum: ['youtube', 'instagram'] },
+        accountId: { type: mongoose.Schema.Types.ObjectId, ref: 'Account' },
+        accountName: String,
+        externalPostId: String,
+        publishedAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   {
     timestamps: true,

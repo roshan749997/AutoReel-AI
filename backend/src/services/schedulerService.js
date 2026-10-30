@@ -239,6 +239,19 @@ export class SchedulerService {
         err.isDuplicate = true;
         throw err;
       }
+
+      // 4.1 Also check video's permanent publishedPlatforms tracking
+      const publishedRecord = video.publishedPlatforms?.find(
+        (p) => String(p.accountId) === String(accountId) || (p.platform === platform && p.accountName === account.accountName)
+      );
+      if (publishedRecord) {
+        const err = new Error(
+          `This video has already been published to ${platform.toUpperCase()} (account: "${account.accountName}", Video ID: ${publishedRecord.externalPostId || 'recorded'}). Duplicate uploads are blocked by policy.`
+        );
+        err.statusCode = 409;
+        err.isDuplicate = true;
+        throw err;
+      }
     } else {
       // Overwrite/update existing scheduled post if still in queue
       const existingPost = await Post.findOne({
@@ -645,8 +658,16 @@ export class SchedulerService {
         });
         await post.save();
 
-        // Update referenced video record status
+        // Update referenced video record status & permanent published platforms history
         video.status = 'published';
+        if (!video.publishedPlatforms) video.publishedPlatforms = [];
+        video.publishedPlatforms.push({
+          platform: 'youtube',
+          accountId: account._id,
+          accountName: account.accountName,
+          externalPostId: uploadResult.externalPostId,
+          publishedAt: new Date(),
+        });
         await video.save();
 
         await WorkflowLog.create({
@@ -709,7 +730,16 @@ export class SchedulerService {
         });
         await post.save();
 
+        // Update referenced video record status & permanent published platforms history
         video.status = 'published';
+        if (!video.publishedPlatforms) video.publishedPlatforms = [];
+        video.publishedPlatforms.push({
+          platform: 'instagram',
+          accountId: account._id,
+          accountName: account.accountName,
+          externalPostId: publishResult.externalPostId,
+          publishedAt: new Date(),
+        });
         await video.save();
 
         await WorkflowLog.create({

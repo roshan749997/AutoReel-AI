@@ -341,6 +341,41 @@ export class YouTubeService {
       categoryId: '24', // Entertainment
     };
 
+    // 3.5 Pre-flight duplicate check on YouTube channel (costs only 1 quota unit)
+    try {
+      const channelRes = await youtube.channels.list({
+        part: 'contentDetails',
+        mine: true,
+      });
+      const uploadsPlaylistId = channelRes.data.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
+      if (uploadsPlaylistId) {
+        const playlistRes = await youtube.playlistItems.list({
+          part: 'snippet',
+          playlistId: uploadsPlaylistId,
+          maxResults: 25,
+        });
+        const items = playlistRes.data.items || [];
+        const normalizedFinalTitle = finalTitle.trim().toLowerCase();
+        const existingItem = items.find((item) => {
+          const itemTitle = (item.snippet?.title || '').trim().toLowerCase();
+          return itemTitle === normalizedFinalTitle;
+        });
+
+        if (existingItem) {
+          const existingVidId = existingItem.snippet?.resourceId?.videoId || existingItem.contentDetails?.videoId;
+          console.warn(`[YouTube Upload] Video with title "${finalTitle}" already exists on channel (ID: ${existingVidId}). Prevented duplicate upload.`);
+          return {
+            externalPostId: existingVidId,
+            externalUrl: `https://www.youtube.com/watch?v=${existingVidId}`,
+            quotaUnitsUsed: 2,
+            isDuplicatePrevented: true,
+          };
+        }
+      }
+    } catch (dupCheckErr) {
+      console.warn(`[YouTube Pre-check] Duplicate check notice: ${dupCheckErr.message}`);
+    }
+
     try {
       const res = await youtube.videos.insert(
         {
