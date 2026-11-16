@@ -507,26 +507,34 @@ router.post('/:id/cancel', async (req, res, next) => {
   }
 });
 
-// 9.5 Retry all failed posts in queue
+// 9.5 Line up all failed posts with staggered schedule (skips expired accounts)
 router.post('/retry-all-failed', async (req, res, next) => {
   try {
-    const failedPosts = await Post.find({ status: 'failed' });
-    let retriedCount = 0;
-    const errors = [];
+    const youtubeGapMs = req.body?.youtubeGapMinutes
+      ? Number(req.body.youtubeGapMinutes) * 60 * 1000
+      : undefined;
+    const instagramGapMs = req.body?.instagramGapMinutes
+      ? Number(req.body.instagramGapMinutes) * 60 * 1000
+      : undefined;
 
-    for (const post of failedPosts) {
-      try {
-        await schedulerService.retryPost(post._id);
-        retriedCount++;
-      } catch (err) {
-        errors.push({ id: post._id, error: err.message });
-      }
-    }
+    const result = await schedulerService.relineFailedPosts({
+      ...(youtubeGapMs ? { youtubeGapMs } : {}),
+      ...(instagramGapMs ? { instagramGapMs } : {}),
+    });
+
+    const windowText = result.window
+      ? ` Schedule window: ${new Date(result.window.from).toLocaleString()} → ${new Date(result.window.to).toLocaleString()} (YT every ${result.window.youtubeGapMinutes}m, IG every ${result.window.instagramGapMinutes}m).`
+      : '';
+
+    const blockedText =
+      result.blockedCount > 0
+        ? ` ${result.blockedCount} left failed — reconnect those social accounts first.`
+        : '';
 
     res.json({
       status: 'success',
-      message: `Reset ${retriedCount} of ${failedPosts.length} failed post(s) for retry.`,
-      data: { retriedCount, totalFailed: failedPosts.length, errors },
+      message: `Lined up ${result.linedUpCount} of ${result.totalFailed} failed post(s) in the publishing queue.${windowText}${blockedText}`,
+      data: result,
     });
   } catch (err) {
     next(err);

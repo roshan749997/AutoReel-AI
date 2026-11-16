@@ -231,14 +231,35 @@ export const PublishingQueueModule = ({ accounts = [], onReload, onNavigate }) =
   };
 
   const handleRetryAllFailed = async () => {
-    if (!window.confirm(`Retry all ${failedCount} failed post(s) now?`)) return;
+    if (
+      !window.confirm(
+        `Line up all ${failedCount} failed post(s) properly?\n\n` +
+          `• Connected accounts → staggered schedule (YouTube ~25 min apart, Instagram ~8 min)\n` +
+          `• Expired/disconnected accounts → stay failed until you Reconnect\n\n` +
+          `This prevents dumping every retry at once and burning API quota.`
+      )
+    ) {
+      return;
+    }
     try {
       setIsActionLoading(true);
       const res = await api.retryAllFailed();
-      alert(res.message || 'All failed posts reset for retry.');
+      const blocked = res.data?.blockedCount || 0;
+      const linedUp = res.data?.linedUpCount || 0;
+      let msg = res.message || `Lined up ${linedUp} post(s).`;
+      if (blocked > 0 && Array.isArray(res.data?.blocked)) {
+        const sample = res.data.blocked
+          .slice(0, 5)
+          .map((b) => `• ${b.accountName}: ${b.reason}`)
+          .join('\n');
+        msg += `\n\nBlocked examples:\n${sample}${blocked > 5 ? `\n…and ${blocked - 5} more` : ''}`;
+      }
+      alert(msg);
+      setFilterStatus('upcoming');
+      setPage(1);
       await refreshQueue();
     } catch (err) {
-      alert(`Retry all failed error: ${err.message}`);
+      alert(`Line up failed error: ${err.message}`);
     } finally {
       setIsActionLoading(false);
     }
@@ -387,7 +408,7 @@ export const PublishingQueueModule = ({ accounts = [], onReload, onNavigate }) =
                 </span>
               </h4>
               <p className="text-xs text-rose-700 mt-0.5">
-                These posts encountered an API or video upload error. They are kept visible below so you can review the failure message and retry them.
+                These posts hit an API/upload error. Use <span className="font-semibold">Line Up Failed</span> to put them back in a staggered queue (expired social accounts are skipped until you reconnect).
               </p>
             </div>
           </div>
@@ -406,8 +427,9 @@ export const PublishingQueueModule = ({ accounts = [], onReload, onNavigate }) =
               isLoading={isActionLoading}
               onClick={handleRetryAllFailed}
               className="text-xs py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold"
+              title="Line up failed posts with staggered schedule (skips expired accounts)"
             >
-              Retry All ({failedCount})
+              Line Up Failed ({failedCount})
             </Button>
           </div>
         </div>

@@ -801,6 +801,65 @@ test('Scheduler Due Query: retrying posts with future nextRetryAt are not claime
   await Account.deleteOne({ _id: account._id });
 });
 
+// Reline failed posts: stagger schedule + skip expired accounts
+test('Scheduler: relineFailedPosts lines up connected accounts and blocks expired ones', async () => {
+  const { video, account: goodAccount } = await createFixtures({ approvalStatus: 'approved' });
+  const expiredAccount = await Account.create({
+    platform: 'youtube',
+    accountId: `yt_expired_${Date.now()}`,
+    accountName: 'Expired Channel',
+    encryptedAccessToken: 'dummy_enc_access_token',
+    status: 'expired',
+    isDemo: true,
+  });
+
+  const failedGood = await Post.create({
+    videoId: video._id,
+    accountId: goodAccount._id,
+    platform: 'youtube',
+    title: 'Failed Good Account',
+    scheduledAt: new Date(Date.now() - 3600000),
+    status: 'failed',
+    publishingStatus: 'failed',
+    attempts: 3,
+    maxAttempts: 3,
+    lastError: { message: 'quota', code: 'QUOTA_EXCEEDED', timestamp: new Date() },
+  });
+
+  const failedExpired = await Post.create({
+    videoId: video._id,
+    accountId: expiredAccount._id,
+    platform: 'youtube',
+    title: 'Failed Expired Account',
+    scheduledAt: new Date(Date.now() - 7200000),
+    status: 'failed',
+    publishingStatus: 'failed',
+    attempts: 3,
+    maxAttempts: 3,
+  });
+
+  const result = await schedulerService.relineFailedPosts({
+    startAt: new Date(Date.now() + 120000),
+    youtubeGapMs: 25 * 60 * 1000,
+  });
+
+  assert.ok(result.linedUpCount >= 1);
+  assert.ok(result.blockedCount >= 1);
+
+  const relined = await Post.findById(failedGood._id);
+  assert.equal(relined.status, 'scheduled');
+  assert.equal(relined.attempts, 0);
+  assert.ok(!relined.lastError?.message);
+  assert.ok(new Date(relined.scheduledAt).getTime() > Date.now());
+
+  const stillFailed = await Post.findById(failedExpired._id);
+  assert.equal(stillFailed.status, 'failed');
+
+  await Post.deleteMany({ _id: { $in: [failedGood._id, failedExpired._id] } });
+  await Video.deleteOne({ _id: video._id });
+  await Account.deleteMany({ _id: { $in: [goodAccount._id, expiredAccount._id] } });
+});
+
 // 21. Instagram Dispatch: Automatically dispatches Instagram Reel, creates container, and marks published
 test('Scheduler Dispatch: Automatically dispatches Instagram Reel, creates container, and marks published', async () => {
   const igAccount = await Account.create({

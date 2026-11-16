@@ -1018,8 +1018,8 @@ export class SchedulerService {
   /**
    * Manual Retry of failed/cancelled post
    */
-  async retryPost(postId) {
-    const post = await Post.findById(postId);
+  async retryPost(postId, { scheduledAt = null } = {}) {
+    const post = await Post.findById(postId).populate('accountId', 'accountName status platform');
     if (!post) throw new Error('Post not found');
 
     if (post.status === 'manual_review') {
@@ -1032,13 +1032,29 @@ export class SchedulerService {
       throw new Error(`Only failed or cancelled posts can be manually retried (status: '${post.status}')`);
     }
 
+    const account = post.accountId;
+    if (account && ['expired', 'disconnected', 'authorization_required'].includes(account.status)) {
+      throw new Error(
+        `Account "${account.accountName}" is ${account.status}. Reconnect the social account before retrying this post.`
+      );
+    }
+
+    const targetDate = scheduledAt ? new Date(scheduledAt) : new Date(Date.now() + 30_000);
+    if (Number.isNaN(targetDate.getTime())) {
+      throw new Error('Invalid scheduledAt for retry');
+    }
+
     post.status = 'scheduled';
+    post.publishingStatus = 'ready_for_dispatch';
+    post.scheduledAt = targetDate;
     post.attempts = 0;
     post.nextRetryAt = null;
-    post.lastError = null;
+    post.set('lastError', undefined);
+    post.claimedAt = null;
+    post.claimedBy = null;
     post.executionLogs.push({
       step: 'manual_retry_reset',
-      message: 'Reset for retry by user',
+      message: `Reset for retry by user — lined up at ${targetDate.toISOString()}`,
       level: 'info',
     });
     await post.save();
@@ -1047,11 +1063,175 @@ export class SchedulerService {
       level: 'info',
       module: 'scheduler',
       action: 'post_retry_reset',
-      message: `Post "${post.title}" reset for retry`,
-      metadata: { postId },
+      message: `Post "${post.title}" reset for retry at ${targetDate.toISOString()}`,
+      metadata: { postId, scheduledAt: targetDate },
     }).catch(() => {});
 
     return post;
+  }
+
+  /**
+   * Line up all failed posts into a spaced schedule.
+   * - Skips posts whose social account is expired/disconnected (must reconnect first)
+   * - Staggers YouTube globally (~25m) to protect shared daily quota
+   * - Staggers Instagram per-account (~8m)
+   * - Continues after existing scheduled/queued work so slots do not collide
+   */
+  async relineFailedPosts({
+    startAt = new Date(Date.now() + 2 * 60 * 1000),
+    youtubeGapMs = 25 * 60 * 1000,
+    instagramGapMs = 8 * 60 * 1000,
+    accountGapMs = 5 * 60 * 1000,
+  } = {}) {
+    const failedPosts = await Post.find({ status: 'failed' })
+      .populate('accountId', 'accountName platform status errorMessage')
+      .sort({ scheduledAt: 1, createdAt: 1 });
+
+    if (failedPosts.length === 0) {
+      return {
+        totalFailed: 0,
+        linedUpCount: 0,
+        blockedCount: 0,
+        linedUp: [],
+        blocked: [],
+        window: null,
+      };
+    }
+
+    const activePosts = await Post.find({
+      status: { $in: ['scheduled', 'queued', 'retrying', 'processing', 'paused'] },
+    })
+      .select('accountId platform scheduledAt nextRetryAt status')
+      .lean();
+
+    const nextSlotByAccount = new Map();
+    let nextYouTubeSlot = null;
+
+    for (const active of activePosts) {
+      const t =
+        active.status === 'retrying' && active.nextRetryAt
+          ? new Date(active.nextRetryAt)
+          : active.scheduledAt
+            ? new Date(active.scheduledAt)
+            : null;
+      if (!t || Number.isNaN(t.getTime())) continue;
+
+      const accKey = String(active.accountId);
+      const prevAcc = nextSlotByAccount.get(accKey);
+      if (!prevAcc || t > prevAcc) nextSlotByAccount.set(accKey, t);
+
+      if (active.platform === 'youtube' && (!nextYouTubeSlot || t > nextYouTubeSlot)) {
+        nextYouTubeSlot = t;
+      }
+    }
+
+    const linedUp = [];
+    const blocked = [];
+    const startMs = Math.max(new Date(startAt).getTime(), Date.now() + 60_000);
+    let earliest = null;
+    let latest = null;
+
+    for (const post of failedPosts) {
+      const account = post.accountId;
+      const accountStatus = account?.status;
+      const accountName = account?.accountName || 'Unknown account';
+
+      if (!account || ['expired', 'disconnected', 'authorization_required'].includes(accountStatus)) {
+        blocked.push({
+          id: post._id,
+          title: post.title,
+          platform: post.platform,
+          accountName,
+          reason: `Account is ${accountStatus || 'missing'}. Reconnect before lining up this post.`,
+        });
+        continue;
+      }
+
+      if (accountStatus && accountStatus !== 'connected') {
+        blocked.push({
+          id: post._id,
+          title: post.title,
+          platform: post.platform,
+          accountName,
+          reason: `Account status is "${accountStatus}". Fix the account first.`,
+        });
+        continue;
+      }
+
+      const accKey = String(account._id);
+      const platformGap = post.platform === 'youtube' ? youtubeGapMs : instagramGapMs;
+      let slotMs = startMs;
+
+      const accLatest = nextSlotByAccount.get(accKey);
+      if (accLatest) {
+        slotMs = Math.max(slotMs, accLatest.getTime() + Math.max(accountGapMs, platformGap));
+      }
+
+      if (post.platform === 'youtube' && nextYouTubeSlot) {
+        slotMs = Math.max(slotMs, nextYouTubeSlot.getTime() + youtubeGapMs);
+      }
+
+      const slot = new Date(slotMs);
+
+      post.status = 'scheduled';
+      post.publishingStatus = 'ready_for_dispatch';
+      post.scheduledAt = slot;
+      post.attempts = 0;
+      post.nextRetryAt = null;
+      post.set('lastError', undefined);
+      post.claimedAt = null;
+      post.claimedBy = null;
+      post.executionLogs.push({
+        step: 'failed_reline',
+        message: `Lined up in publishing queue for ${slot.toISOString()} (${post.timezone || 'UTC'})`,
+        level: 'info',
+      });
+      await post.save();
+
+      nextSlotByAccount.set(accKey, slot);
+      if (post.platform === 'youtube') nextYouTubeSlot = slot;
+
+      if (!earliest || slot < earliest) earliest = slot;
+      if (!latest || slot > latest) latest = slot;
+
+      linedUp.push({
+        id: post._id,
+        title: post.title,
+        platform: post.platform,
+        accountName,
+        scheduledAt: slot,
+      });
+    }
+
+    await WorkflowLog.create({
+      level: 'info',
+      module: 'scheduler',
+      action: 'failed_posts_relined',
+      message: `Lined up ${linedUp.length} failed post(s); blocked ${blocked.length}`,
+      metadata: {
+        linedUpCount: linedUp.length,
+        blockedCount: blocked.length,
+        windowStart: earliest,
+        windowEnd: latest,
+      },
+    }).catch(() => {});
+
+    return {
+      totalFailed: failedPosts.length,
+      linedUpCount: linedUp.length,
+      blockedCount: blocked.length,
+      linedUp,
+      blocked,
+      window:
+        earliest && latest
+          ? {
+              from: earliest,
+              to: latest,
+              youtubeGapMinutes: Math.round(youtubeGapMs / 60000),
+              instagramGapMinutes: Math.round(instagramGapMs / 60000),
+            }
+          : null,
+    };
   }
 
   /**
