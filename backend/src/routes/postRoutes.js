@@ -542,24 +542,27 @@ router.post('/:id/cancel', async (req, res, next) => {
   }
 });
 
-// 9.5 Line up all failed posts with staggered schedule (skips expired accounts)
+// 9.5 Reschedule failed posts from today using each account's original interval
 router.post('/retry-all-failed', async (req, res, next) => {
   try {
-    const youtubeGapMs = req.body?.youtubeGapMinutes
-      ? Number(req.body.youtubeGapMinutes) * 60 * 1000
-      : undefined;
-    const instagramGapMs = req.body?.instagramGapMinutes
-      ? Number(req.body.instagramGapMinutes) * 60 * 1000
+    const defaultIntervalMs = req.body?.intervalMinutes
+      ? Number(req.body.intervalMinutes) * 60 * 1000
       : undefined;
 
     const result = await schedulerService.relineFailedPosts({
-      ...(youtubeGapMs ? { youtubeGapMs } : {}),
-      ...(instagramGapMs ? { instagramGapMs } : {}),
+      ...(defaultIntervalMs ? { defaultIntervalMs } : {}),
     });
 
+    const intervalSummary = (result.intervals || [])
+      .slice(0, 3)
+      .map((i) => `${i.accountName}: every ${i.intervalMinutes}m`)
+      .join('; ');
+
     const windowText = result.window
-      ? ` Schedule window: ${new Date(result.window.from).toLocaleString()} → ${new Date(result.window.to).toLocaleString()} (YT every ${result.window.youtubeGapMinutes}m, IG every ${result.window.instagramGapMinutes}m).`
+      ? ` Window: ${new Date(result.window.from).toLocaleString()} → ${new Date(result.window.to).toLocaleString()}.`
       : '';
+
+    const intervalText = intervalSummary ? ` Intervals: ${intervalSummary}.` : '';
 
     const blockedText =
       result.blockedCount > 0
@@ -568,7 +571,7 @@ router.post('/retry-all-failed', async (req, res, next) => {
 
     res.json({
       status: 'success',
-      message: `Lined up ${result.linedUpCount} of ${result.totalFailed} failed post(s) in the publishing queue.${windowText}${blockedText}`,
+      message: `Rescheduled ${result.linedUpCount} of ${result.totalFailed} failed post(s) from today using original time gaps.${windowText}${intervalText}${blockedText}`,
       data: result,
     });
   } catch (err) {

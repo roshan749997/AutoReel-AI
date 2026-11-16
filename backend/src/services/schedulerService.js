@@ -1071,20 +1071,40 @@ export class SchedulerService {
   }
 
   /**
-   * Line up all failed posts into a spaced schedule.
-   * - Skips posts whose social account is expired/disconnected (must reconnect first)
-   * - Staggers YouTube globally (~25m) to protect shared daily quota
-   * - Staggers Instagram per-account (~8m)
-   * - Continues after existing scheduled/queued work so slots do not collide
+   * Detect the original publish interval (median gap) from timestamps.
+   * Falls back to 120 minutes (same default as Video Library batch schedule).
+   */
+  detectScheduleIntervalMs(timestamps = [], fallbackMs = 120 * 60 * 1000) {
+    const sorted = timestamps
+      .map((t) => new Date(t).getTime())
+      .filter((t) => Number.isFinite(t))
+      .sort((a, b) => a - b);
+
+    const gaps = [];
+    for (let i = 1; i < sorted.length; i++) {
+      const gap = sorted[i] - sorted[i - 1];
+      // Ignore tiny/huge outliers (keep 5 min .. 7 days)
+      if (gap >= 5 * 60 * 1000 && gap <= 7 * 24 * 60 * 60 * 1000) {
+        gaps.push(gap);
+      }
+    }
+    if (gaps.length === 0) return fallbackMs;
+    gaps.sort((a, b) => a - b);
+    return gaps[Math.floor(gaps.length / 2)];
+  }
+
+  /**
+   * Line up failed posts using EACH ACCOUNT's original time interval.
+   * - Start date = today (keeps original clock time when possible)
+   * - End date extends automatically for the last video
+   * - Skips expired/disconnected accounts
    */
   async relineFailedPosts({
-    startAt = new Date(Date.now() + 2 * 60 * 1000),
-    youtubeGapMs = 25 * 60 * 1000,
-    instagramGapMs = 8 * 60 * 1000,
-    accountGapMs = 5 * 60 * 1000,
+    startAt = null,
+    defaultIntervalMs = 120 * 60 * 1000,
   } = {}) {
     const failedPosts = await Post.find({ status: 'failed' })
-      .populate('accountId', 'accountName platform status errorMessage')
+      .populate('accountId', 'accountName platform status errorMessage settings')
       .sort({ scheduledAt: 1, createdAt: 1 });
 
     if (failedPosts.length === 0) {
@@ -1095,19 +1115,19 @@ export class SchedulerService {
         linedUp: [],
         blocked: [],
         window: null,
+        intervals: [],
       };
     }
 
     const activePosts = await Post.find({
       status: { $in: ['scheduled', 'queued', 'retrying', 'processing', 'paused'] },
     })
-      .select('accountId platform scheduledAt nextRetryAt status')
+      .select('accountId scheduledAt nextRetryAt status')
       .lean();
 
-    const nextSlotByAccount = new Map();
-    let nextYouTubeSlot = null;
-
+    const activeByAccount = new Map();
     for (const active of activePosts) {
+      const accKey = String(active.accountId);
       const t =
         active.status === 'retrying' && active.nextRetryAt
           ? new Date(active.nextRetryAt)
@@ -1115,28 +1135,23 @@ export class SchedulerService {
             ? new Date(active.scheduledAt)
             : null;
       if (!t || Number.isNaN(t.getTime())) continue;
-
-      const accKey = String(active.accountId);
-      const prevAcc = nextSlotByAccount.get(accKey);
-      if (!prevAcc || t > prevAcc) nextSlotByAccount.set(accKey, t);
-
-      if (active.platform === 'youtube' && (!nextYouTubeSlot || t > nextYouTubeSlot)) {
-        nextYouTubeSlot = t;
-      }
+      const list = activeByAccount.get(accKey) || [];
+      list.push(t);
+      activeByAccount.set(accKey, list);
     }
 
-    const linedUp = [];
     const blocked = [];
-    const startMs = Math.max(new Date(startAt).getTime(), Date.now() + 60_000);
-    let earliest = null;
-    let latest = null;
+    const eligibleByAccount = new Map();
 
     for (const post of failedPosts) {
       const account = post.accountId;
       const accountStatus = account?.status;
       const accountName = account?.accountName || 'Unknown account';
 
-      if (!account || ['expired', 'disconnected', 'authorization_required'].includes(accountStatus)) {
+      if (
+        !account ||
+        ['expired', 'disconnected', 'authorization_required', 'error'].includes(accountStatus)
+      ) {
         blocked.push({
           id: post._id,
           title: post.title,
@@ -1159,60 +1174,107 @@ export class SchedulerService {
       }
 
       const accKey = String(account._id);
-      const platformGap = post.platform === 'youtube' ? youtubeGapMs : instagramGapMs;
-      let slotMs = startMs;
-
-      const accLatest = nextSlotByAccount.get(accKey);
-      if (accLatest) {
-        slotMs = Math.max(slotMs, accLatest.getTime() + Math.max(accountGapMs, platformGap));
-      }
-
-      if (post.platform === 'youtube' && nextYouTubeSlot) {
-        slotMs = Math.max(slotMs, nextYouTubeSlot.getTime() + youtubeGapMs);
-      }
-
-      const slot = new Date(slotMs);
-
-      post.status = 'scheduled';
-      post.publishingStatus = 'ready_for_dispatch';
-      post.scheduledAt = slot;
-      post.attempts = 0;
-      post.nextRetryAt = null;
-      post.set('lastError', undefined);
-      post.claimedAt = null;
-      post.claimedBy = null;
-      post.executionLogs.push({
-        step: 'failed_reline',
-        message: `Lined up in publishing queue for ${slot.toISOString()} (${post.timezone || 'UTC'})`,
-        level: 'info',
-      });
-      await post.save();
-
-      nextSlotByAccount.set(accKey, slot);
-      if (post.platform === 'youtube') nextYouTubeSlot = slot;
-
-      if (!earliest || slot < earliest) earliest = slot;
-      if (!latest || slot > latest) latest = slot;
-
-      linedUp.push({
-        id: post._id,
-        title: post.title,
-        platform: post.platform,
+      const bucket = eligibleByAccount.get(accKey) || {
+        account,
         accountName,
-        scheduledAt: slot,
+        posts: [],
+      };
+      bucket.posts.push(post);
+      eligibleByAccount.set(accKey, bucket);
+    }
+
+    const linedUp = [];
+    const intervals = [];
+    let earliest = null;
+    let latest = null;
+    const nowMs = Date.now();
+    const minStartMs = startAt ? new Date(startAt).getTime() : nowMs + 2 * 60 * 1000;
+
+    for (const [accKey, bucket] of eligibleByAccount.entries()) {
+      const posts = bucket.posts.sort(
+        (a, b) => new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime()
+      );
+
+      const originalTimes = posts.map((p) => p.scheduledAt);
+      const activeTimes = (activeByAccount.get(accKey) || []).map((d) => d.getTime());
+      const intervalMs = this.detectScheduleIntervalMs(
+        [...originalTimes, ...activeTimes],
+        defaultIntervalMs
+      );
+
+      // Start today, keep original clock time from the first failed post
+      const firstOriginal = new Date(posts[0].scheduledAt);
+      let cursor = new Date();
+      cursor.setHours(
+        firstOriginal.getHours(),
+        firstOriginal.getMinutes(),
+        firstOriginal.getSeconds(),
+        0
+      );
+      if (cursor.getTime() < minStartMs) {
+        cursor = new Date(minStartMs);
+      }
+
+      // Continue after any still-active scheduled work for this account
+      if (activeTimes.length > 0) {
+        const lastActive = Math.max(...activeTimes);
+        cursor = new Date(Math.max(cursor.getTime(), lastActive + intervalMs));
+      }
+
+      intervals.push({
+        accountId: accKey,
+        accountName: bucket.accountName,
+        platform: bucket.account.platform,
+        intervalMinutes: Math.round(intervalMs / 60000),
+        count: posts.length,
+        from: new Date(cursor),
+        to: new Date(cursor.getTime() + (posts.length - 1) * intervalMs),
       });
+
+      for (let i = 0; i < posts.length; i++) {
+        const post = posts[i];
+        const slot = new Date(cursor.getTime() + i * intervalMs);
+
+        post.status = 'scheduled';
+        post.publishingStatus = 'ready_for_dispatch';
+        post.scheduledAt = slot;
+        post.attempts = 0;
+        post.nextRetryAt = null;
+        post.set('lastError', undefined);
+        post.claimedAt = null;
+        post.claimedBy = null;
+        post.executionLogs.push({
+          step: 'failed_reline',
+          message: `Rescheduled from today using original interval ${Math.round(intervalMs / 60000)}m → ${slot.toISOString()} (${post.timezone || 'UTC'})`,
+          level: 'info',
+        });
+        await post.save();
+
+        if (!earliest || slot < earliest) earliest = slot;
+        if (!latest || slot > latest) latest = slot;
+
+        linedUp.push({
+          id: post._id,
+          title: post.title,
+          platform: post.platform,
+          accountName: bucket.accountName,
+          scheduledAt: slot,
+          intervalMinutes: Math.round(intervalMs / 60000),
+        });
+      }
     }
 
     await WorkflowLog.create({
       level: 'info',
       module: 'scheduler',
       action: 'failed_posts_relined',
-      message: `Lined up ${linedUp.length} failed post(s); blocked ${blocked.length}`,
+      message: `Lined up ${linedUp.length} failed post(s) from today using original intervals; blocked ${blocked.length}`,
       metadata: {
         linedUpCount: linedUp.length,
         blockedCount: blocked.length,
         windowStart: earliest,
         windowEnd: latest,
+        intervals,
       },
     }).catch(() => {});
 
@@ -1222,13 +1284,12 @@ export class SchedulerService {
       blockedCount: blocked.length,
       linedUp,
       blocked,
+      intervals,
       window:
         earliest && latest
           ? {
               from: earliest,
               to: latest,
-              youtubeGapMinutes: Math.round(youtubeGapMs / 60000),
-              instagramGapMinutes: Math.round(instagramGapMs / 60000),
             }
           : null,
     };

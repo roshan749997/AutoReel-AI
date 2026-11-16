@@ -234,10 +234,11 @@ export const PublishingQueueModule = ({ accounts = [], onReload, onNavigate }) =
   const handleRetryAllFailed = async () => {
     if (
       !window.confirm(
-        `Line up all ${failedCount} failed post(s) properly?\n\n` +
-          `• Connected accounts → staggered schedule (YouTube ~25 min apart, Instagram ~8 min)\n` +
-          `• Expired/disconnected accounts → stay failed until you Reconnect\n\n` +
-          `This prevents dumping every retry at once and burning API quota.`
+        `Reschedule all ${failedCount} failed post(s)?\n\n` +
+          `• Keep the SAME time interval you originally set\n` +
+          `• Start from TODAY\n` +
+          `• End date extends automatically for the last video\n` +
+          `• Disconnected accounts stay failed until you Reconnect`
       )
     ) {
       return;
@@ -409,7 +410,7 @@ export const PublishingQueueModule = ({ accounts = [], onReload, onNavigate }) =
                 </span>
               </h4>
               <p className="text-xs text-rose-700 mt-0.5">
-                These posts hit an API/upload error. Use <span className="font-semibold">Line Up Failed</span> to put them back in a staggered queue (expired social accounts are skipped until you reconnect).
+                These posts hit an API/upload error. Use <span className="font-semibold">Reschedule Failed</span> to restart from today with the same original time interval (end date extends automatically).
               </p>
             </div>
           </div>
@@ -428,9 +429,9 @@ export const PublishingQueueModule = ({ accounts = [], onReload, onNavigate }) =
               isLoading={isActionLoading}
               onClick={handleRetryAllFailed}
               className="text-xs py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold"
-              title="Line up failed posts with staggered schedule (skips expired accounts)"
+              title="Reschedule failed posts from today using original time intervals"
             >
-              Line Up Failed ({failedCount})
+              Reschedule Failed ({failedCount})
             </Button>
           </div>
         </div>
