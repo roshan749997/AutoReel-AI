@@ -91,6 +91,8 @@ export const api = {
   getYouTubeAuthUrl: () => request('/accounts/google/auth-url'),
   getMetaAuthUrl: () => request('/accounts/meta/auth-url'),
   testAccount: (id) => request(`/accounts/${id}/test`, { method: 'POST' }),
+  refreshAccountTokens: (force = false) =>
+    request('/accounts/refresh-tokens', { method: 'POST', body: { force } }),
   disconnectAccount: (id) => request(`/accounts/${id}/disconnect`, { method: 'POST' }),
   deleteAccount: (id) => request(`/accounts/${id}`, { method: 'DELETE' }),
   getAccountHistory: (id, params = {}) => {

@@ -45,6 +45,7 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
   const [sortOption, setSortOption] = useState('recent'); // 'recent' | 'published_desc' | 'name_asc' | 'subs_desc'
   const [testingId, setTestingId] = useState(null);
   const [isTestingAll, setIsTestingAll] = useState(false);
+  const [isRefreshingTokens, setIsRefreshingTokens] = useState(false);
   const [actionLoadingId, setActionLoadingId] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
@@ -312,6 +313,29 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
       setErrorMsg(`Failed to test channels: ${err.message}`);
     } finally {
       setIsTestingAll(false);
+    }
+  };
+
+  // Proactive OAuth token refresh (keeps connected accounts alive; cannot recover revoked grants)
+  const handleRefreshTokens = async () => {
+    if (realAccounts.length === 0) return;
+    try {
+      setIsRefreshingTokens(true);
+      setErrorMsg(null);
+      const res = await api.refreshAccountTokens(false);
+      const needs = res.data?.needsReconnect?.length || 0;
+      if (needs > 0) {
+        setErrorMsg(
+          `${res.message || 'Some accounts need manual Reconnect.'} Google/Meta revoked grants cannot auto-heal — click Reconnect on those cards.`
+        );
+      } else {
+        setSuccessMsg(res.message || 'Tokens refreshed successfully.');
+      }
+      if (onReload) onReload();
+    } catch (err) {
+      setErrorMsg(`Token auto-refresh failed: ${err.message}`);
+    } finally {
+      setIsRefreshingTokens(false);
     }
   };
 
@@ -797,21 +821,42 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
             <option value="name_asc">Name (A to Z)</option>
           </select>
 
-          {/* 1-Click Test All Tokens Button */}
+          {/* Auto-refresh + Check All */}
           {realAccounts.length > 0 && (
-            <Button
-              variant="secondary"
-              size="sm"
-              icon={RefreshCw}
-              isLoading={isTestingAll}
-              onClick={handleTestAllAccounts}
-              className="text-xs font-semibold py-1.5 bg-white border-slate-200 text-slate-700 hover:text-indigo-600 shadow-2xs cursor-pointer"
-              title="Test OAuth tokens for all connected channels"
-            >
-              Check All
-            </Button>
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={RefreshCw}
+                isLoading={isRefreshingTokens}
+                onClick={handleRefreshTokens}
+                className="text-xs font-semibold py-1.5 bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100 shadow-2xs cursor-pointer"
+                title="Refresh YouTube/Instagram tokens before they expire (runs automatically every 30 min on the server too)"
+              >
+                Auto Refresh Tokens
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={RefreshCw}
+                isLoading={isTestingAll}
+                onClick={handleTestAllAccounts}
+                className="text-xs font-semibold py-1.5 bg-white border-slate-200 text-slate-700 hover:text-indigo-600 shadow-2xs cursor-pointer"
+                title="Test OAuth tokens for all connected channels"
+              >
+                Check All
+              </Button>
+            </>
           )}
         </div>
+      </div>
+
+      <div className="px-1 -mt-2 mb-2 text-[11px] text-slate-500 flex items-start gap-1.5">
+        <Shield className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+        <span>
+          Auto token refresh runs every 30 minutes in the background so healthy accounts stay connected.
+          If a card already shows <span className="font-semibold text-amber-700">Token Expired / invalid_grant</span>, Google or Meta revoked the grant — use <span className="font-semibold">Reconnect Account</span> once (OAuth consent cannot be skipped).
+        </span>
       </div>
 
       {/* 5. Connected Account Cards Grid */}

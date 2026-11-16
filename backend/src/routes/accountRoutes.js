@@ -5,6 +5,7 @@ import { Post } from '../models/Post.js';
 import { WorkflowLog } from '../models/WorkflowLog.js';
 import { youtubeService } from '../services/youtubeService.js';
 import { instagramService } from '../services/instagramService.js';
+import { tokenRefreshService } from '../services/tokenRefreshService.js';
 import { verifyOAuthState } from '../services/cryptoService.js';
 import { verifyTransferState, exchangeAuthCode } from '../drive-transfer/oauth.js';
 import { requireAdminAuth } from '../middleware/auth.js';
@@ -344,6 +345,25 @@ router.patch('/:id/preferences', async (req, res, next) => {
       status: 'success',
       message: 'Account preferences updated successfully',
       data: account.toSafeJSON(),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Proactively refresh OAuth access tokens for all connected social accounts
+router.post('/refresh-tokens', async (req, res, next) => {
+  try {
+    const force = req.body?.force === true || req.query?.force === 'true';
+    const summary = await tokenRefreshService.refreshDueAccounts({ force });
+    const needsReconnect = summary.needsReconnect?.length || 0;
+    res.json({
+      status: 'success',
+      message:
+        needsReconnect > 0
+          ? `Refreshed ${summary.refreshed || 0} token(s). ${needsReconnect} account(s) still need manual Reconnect (revoked/expired grant).`
+          : `Checked ${summary.checked || 0} account(s): ${summary.refreshed || 0} refreshed, ${summary.skipped || 0} still valid.`,
+      data: summary,
     });
   } catch (err) {
     next(err);

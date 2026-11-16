@@ -5,6 +5,7 @@ import { configureSecurity } from './middleware/security.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { schedulerService } from './services/schedulerService.js';
 import { keepAliveService } from './services/keepAliveService.js';
+import { tokenRefreshService } from './services/tokenRefreshService.js';
 import { recoverInterruptedTransfers } from './drive-transfer/worker.js';
 
 // Route imports
@@ -51,9 +52,10 @@ const startServer = async () => {
   // Connect database
   await connectDatabase();
 
-  // Start background post scheduler & 24/7 keep-alive worker
+  // Start background post scheduler, token auto-refresh & 24/7 keep-alive worker
   schedulerService.start();
   keepAliveService.start();
+  tokenRefreshService.start();
   try {
     await recoverInterruptedTransfers();
   } catch (err) {
@@ -73,8 +75,9 @@ const startServer = async () => {
 const gracefulShutdown = async (signal) => {
   console.log(`\n[Server] Received ${signal}. Starting graceful shutdown...`);
 
-  // Stop background scheduler & keep-alive worker
+  // Stop background scheduler, token refresh & keep-alive worker
   schedulerService.stop();
+  tokenRefreshService.stop();
   keepAliveService.stop();
 
   // Close HTTP server
