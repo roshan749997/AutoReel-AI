@@ -1,3 +1,4 @@
+import './config/networkBootstrap.js';
 import express from 'express';
 import { config } from './config/env.js';
 import { connectDatabase, closeDatabase } from './config/database.js';

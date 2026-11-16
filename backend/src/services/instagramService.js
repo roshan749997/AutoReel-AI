@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { config } from '../config/env.js';
+import { ipv4HttpsAgent } from '../config/networkBootstrap.js';
 import { Account } from '../models/Account.js';
 import { WorkflowLog } from '../models/WorkflowLog.js';
 import { generateOAuthState } from './cryptoService.js';
@@ -14,6 +15,45 @@ const INSTAGRAM_GRAPH_BASE = 'https://graph.instagram.com/v20.0';
 const FACEBOOK_LOGIN_AUTH_URL = 'https://www.facebook.com/v20.0/dialog/oauth';
 const FACEBOOK_LOGIN_TOKEN_URL = 'https://graph.facebook.com/v20.0/oauth/access_token';
 const FACEBOOK_GRAPH_BASE = 'https://graph.facebook.com/v20.0';
+
+// Always prefer IPv4 to Meta — avoids Render ENETUNREACH on Facebook AAAA records
+const metaHttp = axios.create({
+  httpsAgent: ipv4HttpsAgent,
+  timeout: 30_000,
+  validateStatus: (status) => status >= 200 && status < 500,
+});
+
+const isTransientNetworkError = (err) => {
+  const code = err?.code || err?.cause?.code || '';
+  const msg = err?.message || '';
+  return (
+    /ETIMEDOUT|ENETUNREACH|ECONNRESET|EAI_AGAIN|ECONNREFUSED|UND_ERR_CONNECT_TIMEOUT/i.test(code) ||
+    /ETIMEDOUT|ENETUNREACH|ECONNRESET|EAI_AGAIN|network|timeout/i.test(msg)
+  );
+};
+
+async function metaRequest(method, url, options = {}, retries = 2) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await metaHttp.request({ method, url, ...options });
+      if (res.status >= 400) {
+        const metaErr = res.data?.error || {};
+        const err = new Error(metaErr.message || `Meta API HTTP ${res.status}`);
+        err.response = res;
+        throw err;
+      }
+      return res;
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientNetworkError(err) || attempt === retries) throw err;
+      const waitMs = 750 * (attempt + 1);
+      console.warn(`[Instagram] Transient network error (${err.code || err.message}). Retry ${attempt + 1}/${retries} in ${waitMs}ms`);
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+  }
+  throw lastErr;
+}
 
 // Scopes per flow — strictly separated to avoid mixing scopes
 export const INSTAGRAM_LOGIN_SCOPES = [
@@ -137,7 +177,8 @@ export class InstagramService {
     formParams.append('redirect_uri', config.meta.redirectUri);
     formParams.append('code', code);
 
-    const tokenRes = await axios.post(INSTAGRAM_LOGIN_TOKEN_URL, formParams.toString(), {
+    const tokenRes = await metaRequest('post', INSTAGRAM_LOGIN_TOKEN_URL, {
+      data: formParams.toString(),
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
@@ -151,7 +192,7 @@ export class InstagramService {
     }
 
     // 2. Exchange short-lived token for 60-day long-lived access token
-    const longLivedRes = await axios.get(INSTAGRAM_LOGIN_EXCHANGE_URL, {
+    const longLivedRes = await metaRequest('get', INSTAGRAM_LOGIN_EXCHANGE_URL, {
       params: {
         grant_type: 'ig_exchange_token',
         client_secret: config.meta.appSecret,
@@ -167,7 +208,7 @@ export class InstagramService {
     }
 
     // 3. Fetch authenticated user profile details from graph.instagram.com
-    const profileRes = await axios.get(`${INSTAGRAM_GRAPH_BASE}/me`, {
+    const profileRes = await metaRequest('get', `${INSTAGRAM_GRAPH_BASE}/me`, {
       params: {
         fields: 'id,username,name,profile_picture_url',
         access_token: longLivedToken,
@@ -233,7 +274,7 @@ export class InstagramService {
    * Legacy Facebook Login callback handler (with Facebook Pages traversal)
    */
   async _handleFacebookLoginCallback(code) {
-    const tokenRes = await axios.get(FACEBOOK_LOGIN_TOKEN_URL, {
+    const tokenRes = await metaRequest('get', FACEBOOK_LOGIN_TOKEN_URL, {
       params: {
         client_id: config.meta.appId,
         client_secret: config.meta.appSecret,
@@ -244,7 +285,7 @@ export class InstagramService {
 
     const shortLivedToken = tokenRes.data.access_token;
 
-    const longLivedRes = await axios.get(FACEBOOK_LOGIN_TOKEN_URL, {
+    const longLivedRes = await metaRequest('get', FACEBOOK_LOGIN_TOKEN_URL, {
       params: {
         grant_type: 'fb_exchange_token',
         client_id: config.meta.appId,
@@ -256,7 +297,7 @@ export class InstagramService {
     const longLivedToken = longLivedRes.data.access_token;
     const expiresIn = longLivedRes.data.expires_in;
 
-    const pagesRes = await axios.get(`${FACEBOOK_GRAPH_BASE}/me/accounts`, {
+    const pagesRes = await metaRequest('get', `${FACEBOOK_GRAPH_BASE}/me/accounts`, {
       params: {
         access_token: longLivedToken,
         fields: 'id,name,instagram_business_account{id,username,name,profile_picture_url}',
@@ -367,7 +408,7 @@ export class InstagramService {
       let expiresIn = null;
 
       if (flow === 'facebook_login') {
-        const refreshRes = await axios.get(FACEBOOK_LOGIN_TOKEN_URL, {
+        const refreshRes = await metaRequest('get', FACEBOOK_LOGIN_TOKEN_URL, {
           params: {
             grant_type: 'fb_exchange_token',
             client_id: config.meta.appId,
@@ -378,7 +419,7 @@ export class InstagramService {
         refreshedToken = refreshRes.data.access_token || accessToken;
         expiresIn = refreshRes.data.expires_in;
       } else {
-        const refreshRes = await axios.get(`${INSTAGRAM_GRAPH_BASE}/refresh_access_token`, {
+        const refreshRes = await metaRequest('get', `${INSTAGRAM_GRAPH_BASE}/refresh_access_token`, {
           params: {
             grant_type: 'ig_refresh_token',
             access_token: accessToken,
@@ -451,7 +492,7 @@ export class InstagramService {
         ? `${graphBase}/${account.accountId}`
         : `${graphBase}/me`;
 
-      const res = await axios.get(queryEndpoint, {
+      const res = await metaRequest('get', queryEndpoint, {
         params: {
           fields: 'id,username,name,profile_picture_url',
           access_token: accessToken,
@@ -479,7 +520,23 @@ export class InstagramService {
       };
     } catch (err) {
       const metaError = err.response?.data?.error;
-      const isAuthError = metaError?.code === 190 || err.message?.includes('OAuthException');
+      const isAuthError = metaError?.code === 190 || /OAuthException|invalid.*token|expired/i.test(err.message || '');
+      const isNetwork = isTransientNetworkError(err);
+
+      // Network blips must NOT mark accounts expired — that forces unnecessary reconnects
+      if (isNetwork) {
+        account.errorMessage = `Temporary network issue reaching Meta (IPv4 retry applied): ${err.message}. Click Check again in a minute.`;
+        await account.save().catch(() => {});
+        return {
+          configured: true,
+          connected: false,
+          temporary: true,
+          status: account.status,
+          error: account.errorMessage,
+          message: account.errorMessage,
+        };
+      }
+
       account.status = isAuthError ? 'expired' : 'error';
       account.errorMessage = metaError?.message || err.message;
       await account.save().catch(() => {});
@@ -505,7 +562,7 @@ export class InstagramService {
 
     try {
       // Step 1: Create media container
-      const createRes = await axios.post(`${graphBase}/${igUserId}/media`, null, {
+      const createRes = await metaRequest('post', `${graphBase}/${igUserId}/media`, {
         params: {
           media_type: 'REELS',
           video_url: videoUrl,
@@ -528,7 +585,7 @@ export class InstagramService {
         await new Promise((resolve) => setTimeout(resolve, 5000));
         attempts++;
 
-        const statusRes = await axios.get(`${graphBase}/${containerId}`, {
+        const statusRes = await metaRequest('get', `${graphBase}/${containerId}`, {
           params: {
             fields: 'status_code,status',
             access_token: accessToken,
@@ -547,7 +604,7 @@ export class InstagramService {
       }
 
       // Step 3: Publish media container
-      const publishRes = await axios.post(`${graphBase}/${igUserId}/media_publish`, null, {
+      const publishRes = await metaRequest('post', `${graphBase}/${igUserId}/media_publish`, {
         params: {
           creation_id: containerId,
           access_token: accessToken,
