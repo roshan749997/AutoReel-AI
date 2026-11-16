@@ -22,16 +22,9 @@ export const resolveBackendPublicUrl = () => {
   const publicUrl = (process.env.PUBLIC_URL || '').trim().replace(/\/$/, '');
   const clientUrl = (process.env.CLIENT_URL || '').trim().replace(/\/$/, '');
 
-  const isDeadTunnelOrLocal = (url) => {
-    if (!url) return true;
-    if (/localhost|127\.0\.0\.1/i.test(url)) return true;
-    if (/ngrok/i.test(url)) return true;
-    return false;
-  };
-
   if (renderExternal) return renderExternal;
-  if (backendBase && !isDeadTunnelOrLocal(backendBase)) return backendBase;
-  if (publicUrl && !isDeadTunnelOrLocal(publicUrl)) return publicUrl;
+  if (backendBase && !isDeadTunnelOrLocalUrl(backendBase)) return backendBase;
+  if (publicUrl && !isDeadTunnelOrLocalUrl(publicUrl)) return publicUrl;
   if (/onrender\.com/i.test(clientUrl) || process.env.NODE_ENV === 'production') {
     return 'https://autoreel-ai-2.onrender.com';
   }
@@ -40,11 +33,30 @@ export const resolveBackendPublicUrl = () => {
   return `http://localhost:${port}`;
 };
 
+const isDeadTunnelOrLocalUrl = (url) => {
+  if (!url) return true;
+  if (/localhost|127\.0\.0\.1/i.test(url)) return true;
+  if (/ngrok/i.test(url)) return true;
+  return false;
+};
+
+const resolveProductionBackendBase = () => {
+  const renderExternal = (process.env.RENDER_EXTERNAL_URL || '').trim().replace(/\/$/, '');
+  const backendBase = (process.env.BACKEND_URL || '').trim().replace(/\/$/, '');
+  const clientUrl = (process.env.CLIENT_URL || '').trim().replace(/\/$/, '');
+
+  if (renderExternal) return renderExternal;
+  if (backendBase && !isDeadTunnelOrLocalUrl(backendBase)) return backendBase;
+  if (/onrender\.com/i.test(clientUrl) || process.env.NODE_ENV === 'production') {
+    return 'https://autoreel-ai-2.onrender.com';
+  }
+  return '';
+};
+
 export const resolveGoogleRedirectUri = () => {
   const envUri = (process.env.GOOGLE_REDIRECT_URI || '').trim();
   const clientUrl = (process.env.CLIENT_URL || '').trim().replace(/\/$/, '');
-  const renderExternal = (process.env.RENDER_EXTERNAL_URL || '').trim().replace(/\/$/, '');
-  const backendBase = renderExternal || (process.env.BACKEND_URL || '').trim().replace(/\/$/, '');
+  const backendBase = resolveProductionBackendBase();
 
   // Guard against misconfiguration where GOOGLE_REDIRECT_URI was pointed at frontend static domain
   const isFrontendDomain = (uri) => {
@@ -60,6 +72,12 @@ export const resolveGoogleRedirectUri = () => {
     return `${targetBase}/api/accounts/google/callback`;
   }
 
+  // Dead ngrok / localhost callbacks break production reconnects
+  if (envUri && isDeadTunnelOrLocalUrl(envUri) && backendBase) {
+    console.warn(`[OAuth Config] WARNING: GOOGLE_REDIRECT_URI (${envUri}) is ngrok/localhost. Overriding to ${backendBase}/api/accounts/google/callback`);
+    return `${backendBase}/api/accounts/google/callback`;
+  }
+
   if (envUri) {
     return envUri;
   }
@@ -70,6 +88,31 @@ export const resolveGoogleRedirectUri = () => {
 
   const port = process.env.PORT || '5000';
   return `http://localhost:${port}/api/accounts/google/callback`;
+};
+
+export const resolveMetaRedirectUri = () => {
+  const envUri = (process.env.META_REDIRECT_URI || '').trim();
+  const backendBase = resolveProductionBackendBase();
+  const productionCallback = `${backendBase || 'https://autoreel-ai-2.onrender.com'}/api/accounts/meta/callback`;
+
+  // Production / Render must never send Instagram OAuth back to a dead ngrok tunnel
+  if (envUri && isDeadTunnelOrLocalUrl(envUri) && (backendBase || process.env.NODE_ENV === 'production')) {
+    console.warn(
+      `[OAuth Config] WARNING: META_REDIRECT_URI (${envUri}) is ngrok/localhost. Overriding to ${productionCallback}`
+    );
+    return productionCallback;
+  }
+
+  if (envUri) {
+    return envUri;
+  }
+
+  if (backendBase) {
+    return `${backendBase}/api/accounts/meta/callback`;
+  }
+
+  const port = process.env.PORT || '5000';
+  return `http://localhost:${port}/api/accounts/meta/callback`;
 };
 
 export const config = {
@@ -108,7 +151,7 @@ export const config = {
   meta: {
     appId: process.env.INSTAGRAM_APP_ID || process.env.META_APP_ID || '',
     appSecret: process.env.INSTAGRAM_APP_SECRET || process.env.META_APP_SECRET || '',
-    redirectUri: process.env.META_REDIRECT_URI || 'http://localhost:5000/api/accounts/meta/callback',
+    redirectUri: resolveMetaRedirectUri(),
     authFlow: process.env.META_AUTH_FLOW || 'instagram_login', // 'instagram_login' | 'facebook_login'
   },
 
