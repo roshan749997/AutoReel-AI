@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Sidebar } from './components/layout/Sidebar.jsx';
 import { Header } from './components/layout/Header.jsx';
 import { StatusBanner } from './components/layout/StatusBanner.jsx';
@@ -15,9 +15,11 @@ import { DriveTransferModule } from './components/modules/DriveTransferModule.js
 import { api } from './api/client.js';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 
+const BOOT_CACHE_KEY = 'autoreel_boot_cache_v1';
+const BOOT_CACHE_TTL_MS = 60_000;
+
 const getInitialTab = () => {
   if (typeof window !== 'undefined') {
-    // Defense-in-depth: If a browser callback somehow lands on frontend domain /api/accounts/google/callback, bounce to backend
     if (window.location.pathname.startsWith('/api/accounts/google/callback')) {
       const backendBase = (import.meta.env.VITE_API_URL || 'https://autoreel-ai-2.onrender.com/api').replace(/\/api\/?$/, '');
       window.location.replace(`${backendBase}/api/accounts/google/callback${window.location.search}`);
@@ -25,15 +27,11 @@ const getInitialTab = () => {
     }
 
     const params = new URLSearchParams(window.location.search);
-    if (params.get('tab') === 'drive-transfer') {
-      return 'drive-transfer';
-    }
+    if (params.get('tab') === 'drive-transfer') return 'drive-transfer';
     if (params.get('tab') === 'accounts' || params.has('error') || params.has('connected') || params.has('error_code')) {
       return 'accounts';
     }
-    if (window.location.pathname.includes('/accounts')) {
-      return 'accounts';
-    }
+    if (window.location.pathname.includes('/accounts')) return 'accounts';
   }
   return 'overview';
 };
@@ -46,29 +44,53 @@ const emptyPostCounts = {
   failed: 0,
 };
 
+const readBootCache = () => {
+  try {
+    const raw = sessionStorage.getItem(BOOT_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.savedAt || Date.now() - parsed.savedAt > BOOT_CACHE_TTL_MS) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+const writeBootCache = (payload) => {
+  try {
+    sessionStorage.setItem(BOOT_CACHE_KEY, JSON.stringify({ ...payload, savedAt: Date.now() }));
+  } catch {
+    // ignore quota / private mode
+  }
+};
+
 export default function App() {
+  const cachedBoot = typeof window !== 'undefined' ? readBootCache() : null;
   const [activeTab, setActiveTab] = useState(getInitialTab);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
-  const [isLoadingInitial, setIsLoadingInitial] = useState(true);
+  // If we have a fresh cache, skip the full-page spinner immediately
+  const [isLoadingInitial, setIsLoadingInitial] = useState(!cachedBoot);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [backendError, setBackendError] = useState(null);
 
-  // Data states
-  const [healthData, setHealthData] = useState(null);
+  const [healthData, setHealthData] = useState(cachedBoot?.healthData || null);
   const [integrations, setIntegrations] = useState(null);
   const [checklist, setChecklist] = useState(null);
-  const [accounts, setAccounts] = useState([]);
+  const [accounts, setAccounts] = useState(cachedBoot?.accounts || []);
   const [videos, setVideos] = useState([]);
   const [videoPagination, setVideoPagination] = useState(null);
   const [upcomingPosts, setUpcomingPosts] = useState([]);
-  const [postCounts, setPostCounts] = useState(emptyPostCounts);
+  const [postCounts, setPostCounts] = useState(cachedBoot?.postCounts || emptyPostCounts);
   const [logs, setLogs] = useState([]);
   const [n8nStatus, setN8nStatus] = useState(null);
   const [isSyncingDrive, setIsSyncingDrive] = useState(false);
 
-  // Filters
   const [videoFilters, setVideoFilters] = useState({ page: 1, limit: 12, search: '', status: '' });
   const [logFilters, setLogFilters] = useState({ page: 1, limit: 30, module: '', level: '' });
+
+  const videosLoadedFor = useRef('');
+  const logsLoadedFor = useRef('');
+  const upcomingLoaded = useRef(false);
 
   const loadDeferredMeta = useCallback(async () => {
     const [integrationsSettled, checklistSettled, n8nSettled] = await Promise.allSettled([
@@ -82,92 +104,142 @@ export default function App() {
     if (n8nSettled.status === 'fulfilled') setN8nStatus(n8nSettled.value?.data || { isReachable: false });
   }, []);
 
-  const loadCoreData = useCallback(async (showRefreshingSpinner = false) => {
+  // Fast bootstrap: only health + accounts + post stats (needed for shell/sidebar)
+  const loadBootstrap = useCallback(async (showRefreshingSpinner = false) => {
     if (showRefreshingSpinner) setIsRefreshing(true);
     setBackendError(null);
 
     try {
-      // Critical path only — no full posts dump, no n8n/integration probes
-      const [
-        healthSettled,
-        accountsSettled,
-        postStatsSettled,
-        upcomingSettled,
-        videosSettled,
-        logsSettled,
-      ] = await Promise.allSettled([
-        api.getHealth(),
-        api.getAccounts(),
-        api.getPostStats(),
-        api.getPosts({ status: 'upcoming', limit: 20, page: 1 }),
-        api.getVideos(videoFilters),
-        api.getLogs(logFilters),
+      const [healthSettled, accountsSettled, postStatsSettled] = await Promise.allSettled([
+        api.getHealth({ timeoutMs: 8000 }),
+        api.getAccounts({}, { timeoutMs: 10000 }),
+        api.getPostStats({}, { timeoutMs: 10000 }),
       ]);
 
-      if (healthSettled.status === 'fulfilled') setHealthData(healthSettled.value);
-      if (accountsSettled.status === 'fulfilled') setAccounts(accountsSettled.value?.data || []);
+      let nextHealth = null;
+      let nextAccounts = [];
+      let nextCounts = emptyPostCounts;
+
+      if (healthSettled.status === 'fulfilled') {
+        nextHealth = healthSettled.value;
+        setHealthData(nextHealth);
+      }
+      if (accountsSettled.status === 'fulfilled') {
+        nextAccounts = accountsSettled.value?.data || [];
+        setAccounts(nextAccounts);
+      }
       if (postStatsSettled.status === 'fulfilled') {
-        setPostCounts(postStatsSettled.value?.data || emptyPostCounts);
+        nextCounts = postStatsSettled.value?.data || emptyPostCounts;
+        setPostCounts(nextCounts);
       }
-      if (upcomingSettled.status === 'fulfilled') {
-        setUpcomingPosts(upcomingSettled.value?.data || []);
-        if (upcomingSettled.value?.counts) {
-          setPostCounts((prev) => ({ ...prev, ...upcomingSettled.value.counts }));
-        }
-      }
-      if (videosSettled.status === 'fulfilled') {
-        setVideos(videosSettled.value?.data || []);
-        setVideoPagination(videosSettled.value?.pagination || {});
-      }
-      if (logsSettled.status === 'fulfilled') setLogs(logsSettled.value?.data || []);
+
+      writeBootCache({
+        healthData: nextHealth,
+        accounts: nextAccounts,
+        postCounts: nextCounts,
+      });
 
       if (healthSettled.status === 'rejected') {
         setBackendError(
-          'Backend API is currently unreachable. Make sure your Express server is running on port 5000 (`npm run dev:backend`).'
+          'Backend API is currently unreachable. If this is Render free tier, wait for cold start (~30–60s) then Retry.'
         );
       }
     } catch (err) {
-      console.error('[Dashboard Error] Failed to load data:', err);
+      console.error('[Dashboard Error] Bootstrap failed:', err);
       setBackendError(
-        'Backend API is currently unreachable. Make sure your Express server is running on port 5000 (`npm run dev:backend`).'
+        'Backend API is currently unreachable. If this is Render free tier, wait for cold start (~30–60s) then Retry.'
       );
     } finally {
       setIsLoadingInitial(false);
       setIsRefreshing(false);
     }
-  }, [videoFilters, logFilters]);
+  }, []);
+
+  const loadVideos = useCallback(async () => {
+    const key = JSON.stringify(videoFilters);
+    try {
+      const res = await api.getVideos(videoFilters, { timeoutMs: 15000 });
+      setVideos(res?.data || []);
+      setVideoPagination(res?.pagination || {});
+      videosLoadedFor.current = key;
+    } catch (err) {
+      console.warn('[Dashboard] Videos load failed:', err.message);
+    }
+  }, [videoFilters]);
+
+  const loadLogs = useCallback(async () => {
+    const key = JSON.stringify(logFilters);
+    try {
+      const res = await api.getLogs(logFilters, { timeoutMs: 12000 });
+      setLogs(res?.data || []);
+      logsLoadedFor.current = key;
+    } catch (err) {
+      console.warn('[Dashboard] Logs load failed:', err.message);
+    }
+  }, [logFilters]);
+
+  const loadUpcoming = useCallback(async () => {
+    try {
+      const res = await api.getPosts(
+        { status: 'queued,scheduled,retrying', limit: 8, page: 1, light: true },
+        { timeoutMs: 12000 }
+      );
+      setUpcomingPosts(res?.data || []);
+      upcomingLoaded.current = true;
+    } catch (err) {
+      console.warn('[Dashboard] Upcoming posts load failed:', err.message);
+    }
+  }, []);
 
   const loadData = useCallback(async (showRefreshingSpinner = false) => {
-    await loadCoreData(showRefreshingSpinner);
-    // Heavy probes after first paint / core data
+    await loadBootstrap(showRefreshingSpinner);
     loadDeferredMeta();
-  }, [loadCoreData, loadDeferredMeta]);
+    // Reset lazy flags so active tab reloads fresh data
+    videosLoadedFor.current = '';
+    logsLoadedFor.current = '';
+    upcomingLoaded.current = false;
+  }, [loadBootstrap, loadDeferredMeta]);
 
+  // Initial boot
   useEffect(() => {
-    loadData();
+    loadBootstrap();
+    // Deferred heavy probes — never block first paint
+    const deferredTimer = setTimeout(() => loadDeferredMeta(), 500);
+    const safetyTimer = setTimeout(() => setIsLoadingInitial(false), 2000);
 
-    // Absolute fallback: never keep user stuck on initial loading screen for more than 3.5s
-    const safetyTimer = setTimeout(() => {
-      setIsLoadingInitial(false);
-    }, 3500);
-
-    // Core refresh every 60s (was 30s + full 4k posts dump)
-    const interval = setInterval(() => loadCoreData(false), 60000);
-    const deferredInterval = setInterval(() => loadDeferredMeta(), 120000);
+    const interval = setInterval(() => loadBootstrap(false), 90000);
+    const deferredInterval = setInterval(() => loadDeferredMeta(), 180000);
 
     return () => {
+      clearTimeout(deferredTimer);
       clearTimeout(safetyTimer);
       clearInterval(interval);
       clearInterval(deferredInterval);
     };
-  }, [loadData, loadCoreData, loadDeferredMeta]);
+  }, [loadBootstrap, loadDeferredMeta]);
+
+  // Tab-scoped lazy loads
+  useEffect(() => {
+    if (activeTab === 'overview' && !upcomingLoaded.current) {
+      loadUpcoming();
+    }
+    if (activeTab === 'library') {
+      const key = JSON.stringify(videoFilters);
+      if (videosLoadedFor.current !== key) loadVideos();
+    }
+    if (activeTab === 'logs') {
+      const key = JSON.stringify(logFilters);
+      if (logsLoadedFor.current !== key) loadLogs();
+    }
+  }, [activeTab, videoFilters, logFilters, loadUpcoming, loadVideos, loadLogs]);
 
   const handleSyncDrive = async () => {
     try {
       setIsSyncingDrive(true);
       const res = await api.syncVideos();
       alert(`Sync completed! ${res.data.totalIndexed} new videos indexed, ${res.data.totalUpdated} updated.`);
-      loadData();
+      videosLoadedFor.current = '';
+      await loadVideos();
     } catch (err) {
       alert(`Drive sync failed: ${err.message}. Please configure GOOGLE_CLIENT_ID and connect via Social Accounts.`);
     } finally {
@@ -184,7 +256,7 @@ export default function App() {
   const failedPostsCount = postCounts.failed || 0;
 
   const stats = {
-    indexedVideos: checklist?.stats?.indexedVideos ?? videos.length,
+    indexedVideos: checklist?.stats?.indexedVideos ?? videoPagination?.total ?? videos.length,
     connectedAccounts: accounts.length,
     queuedPosts: (postCounts.queued || 0) + (postCounts.scheduled || 0),
     publishedPosts: postCounts.published || 0,
@@ -193,7 +265,6 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-slate-50 text-slate-900 overflow-hidden">
-      {/* Sidebar Navigation */}
       <Sidebar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
@@ -203,9 +274,7 @@ export default function App() {
         failedPostsCount={failedPostsCount}
       />
 
-      {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 lg:pl-64 overflow-hidden">
-        {/* Header */}
         <Header
           activeTab={activeTab}
           onOpenMobile={() => setIsMobileOpen(true)}
@@ -214,10 +283,8 @@ export default function App() {
           systemStatus={systemStatus}
         />
 
-        {/* Setup Banner */}
         <StatusBanner checklist={checklist} onNavigate={setActiveTab} />
 
-        {/* Backend Connection Error Alert */}
         {backendError && (
           <div className="bg-rose-50/40 border-b border-rose-500/30 px-6 py-2.5 flex items-center justify-between text-xs text-rose-700">
             <div className="flex items-center gap-2">
@@ -233,12 +300,11 @@ export default function App() {
           </div>
         )}
 
-        {/* Module Content */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
           {isLoadingInitial ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-3">
               <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
-              <p className="text-xs">Initializing dashboard...</p>
+              <p className="text-xs">Loading dashboard shell...</p>
             </div>
           ) : (
             <div className="max-w-7xl mx-auto">
@@ -247,7 +313,7 @@ export default function App() {
                   integrations={integrations}
                   checklist={checklist}
                   stats={stats}
-                  upcomingPosts={upcomingPosts.filter((p) => ['queued', 'scheduled', 'retrying'].includes(p.status))}
+                  upcomingPosts={upcomingPosts}
                   onNavigate={setActiveTab}
                   onSyncDrive={handleSyncDrive}
                 />
@@ -302,9 +368,7 @@ export default function App() {
               )}
 
               {activeTab === 'calendar' && (
-                <CalendarModule
-                  onNavigate={setActiveTab}
-                />
+                <CalendarModule onNavigate={setActiveTab} />
               )}
 
               {activeTab === 'automation' && (
@@ -317,15 +381,16 @@ export default function App() {
               {activeTab === 'logs' && (
                 <LogsModule
                   logs={logs}
-                  onReload={loadData}
+                  onReload={() => {
+                    logsLoadedFor.current = '';
+                    loadLogs();
+                  }}
                   pagination={{ page: logFilters.page, limit: logFilters.limit }}
                   onFilterChange={(f) => setLogFilters((prev) => ({ ...prev, ...f, page: 1 }))}
                 />
               )}
 
-              {activeTab === 'drive-transfer' && (
-                <DriveTransferModule />
-              )}
+              {activeTab === 'drive-transfer' && <DriveTransferModule />}
             </div>
           )}
         </main>

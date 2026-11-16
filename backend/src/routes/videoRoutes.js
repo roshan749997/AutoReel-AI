@@ -280,16 +280,18 @@ router.get('/', async (req, res, next) => {
       status: { $in: ['scheduled', 'queued', 'processing', 'retrying'] },
     });
 
-    // Self-heal: If any video is marked 'queued' but has NO active posts in queue, release it back to library
-    await Video.updateMany(
-      {
-        status: 'queued',
-        _id: { $nin: activeQueuedPostVideoIds },
-      },
-      {
-        $set: { status: 'metadata_ready' },
-      }
-    );
+    // Self-heal only when explicitly requested — avoids write-on-read on every page refresh
+    if (req.query.heal === '1' || req.query.heal === 'true') {
+      await Video.updateMany(
+        {
+          status: 'queued',
+          _id: { $nin: activeQueuedPostVideoIds },
+        },
+        {
+          $set: { status: 'metadata_ready' },
+        }
+      );
+    }
 
     const { query, sortOptions } = catalogFilters(req, driveInfo, activeQueuedPostVideoIds);
 

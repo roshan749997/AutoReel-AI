@@ -82,6 +82,7 @@ export const PublishingQueueModule = ({ accounts = [], onReload, onNavigate }) =
         status: filterStatus === 'all' ? undefined : filterStatus,
         platform: platformFilter !== 'all' ? platformFilter : undefined,
         accountId: accountFilter !== 'all' ? accountFilter : undefined,
+        includeCounts: true,
       };
 
       // Channel filter maps to the linked YT/IG account ids for that folder

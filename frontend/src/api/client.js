@@ -75,14 +75,14 @@ async function request(endpoint, options = {}) {
 
 export const api = {
   // Health & System
-  getHealth: () => request('/health'),
-  getIntegrations: () => request('/health/integrations'),
-  getSetupChecklist: () => request('/health/setup-checklist'),
+  getHealth: (options = {}) => request('/health', options),
+  getIntegrations: (options = {}) => request('/health/integrations', options),
+  getSetupChecklist: (options = {}) => request('/health/setup-checklist', options),
 
   // Social Accounts
-  getAccounts: (params = {}) => {
+  getAccounts: (params = {}, options = {}) => {
     const query = new URLSearchParams(params).toString();
-    return request(`/accounts${query ? `?${query}` : ''}`);
+    return request(`/accounts${query ? `?${query}` : ''}`, options);
   },
   getAccount: (id) => request(`/accounts/${id}`),
   updateAccountPreferences: (id, preferences) =>
@@ -126,9 +126,9 @@ export const api = {
     const query = new URLSearchParams(params).toString();
     return request(`/videos/stats${query ? `?${query}` : ''}`);
   },
-  getVideos: (params = {}) => {
+  getVideos: (params = {}, options = {}) => {
     const query = new URLSearchParams(params).toString();
-    return request(`/videos${query ? `?${query}` : ''}`);
+    return request(`/videos${query ? `?${query}` : ''}`, options);
   },
   getVideoIds: (params = {}) => {
     const query = new URLSearchParams(params).toString();
@@ -152,16 +152,16 @@ export const api = {
   updateAiDraft: (videoId, updates) => request(`/ai/draft/${videoId}`, { method: 'PATCH', body: updates }),
 
   // Publishing Queue & Posts
-  getPostStats: (params = {}) => {
+  getPostStats: (params = {}, options = {}) => {
     const query = new URLSearchParams(params).toString();
-    return request(`/posts/stats${query ? `?${query}` : ''}`);
+    return request(`/posts/stats${query ? `?${query}` : ''}`, options);
   },
-  getPosts: (params = {}) => {
+  getPosts: (params = {}, options = {}) => {
     const cleaned = Object.fromEntries(
       Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '')
     );
     const query = new URLSearchParams(cleaned).toString();
-    return request(`/posts${query ? `?${query}` : ''}`);
+    return request(`/posts${query ? `?${query}` : ''}`, options);
   },
   createPost: (postData) => request('/posts', { method: 'POST', body: postData }),
   scheduleMultiPlatform: (postData) => request('/posts/multi-platform', { method: 'POST', body: postData }),
@@ -191,9 +191,9 @@ export const api = {
   triggerWorkflow: (payload) => request('/workflows/trigger', { method: 'POST', body: payload }),
 
   // Audit Logs
-  getLogs: (params = {}) => {
+  getLogs: (params = {}, options = {}) => {
     const query = new URLSearchParams(params).toString();
-    return request(`/logs${query ? `?${query}` : ''}`);
+    return request(`/logs${query ? `?${query}` : ''}`, options);
   },
   clearLogs: () => request('/logs', { method: 'DELETE' }),
 };

@@ -62,8 +62,32 @@ async function aggregatePostCounts(baseQuery = {}) {
   const match = { ...baseQuery };
   delete match.status;
 
+  // Fast path: indexed per-status counts when no extra filters
+  if (Object.keys(match).length === 0) {
+    const statuses = [
+      'draft',
+      'scheduled',
+      'queued',
+      'processing',
+      'retrying',
+      'paused',
+      'published',
+      'failed',
+      'cancelled',
+      'manual_review',
+    ];
+    const results = await Promise.all(statuses.map((status) => Post.countDocuments({ status })));
+    const counts = emptyStatusCounts();
+    statuses.forEach((status, i) => {
+      counts[status] = results[i] || 0;
+      counts.total += counts[status];
+    });
+    counts.upcoming = UPCOMING_STATUSES.reduce((sum, status) => sum + (counts[status] || 0), 0);
+    return counts;
+  }
+
   const rows = await Post.aggregate([
-    ...(Object.keys(match).length ? [{ $match: match }] : []),
+    { $match: match },
     { $group: { _id: '$status', count: { $sum: 1 } } },
   ]);
 
@@ -105,23 +129,34 @@ router.get('/', async (req, res, next) => {
     const sortField = req.query.sortBy === 'publishedAt' ? 'publishedAt' : 'scheduledAt';
 
     const query = buildPostListQuery(req.query);
-    const countQuery = { ...query };
-    delete countQuery.status;
+    const includeCounts = req.query.includeCounts === 'true' || req.query.includeCounts === '1';
+    const light = req.query.light === 'true' || req.query.light === '1';
 
-    const [posts, total, counts] = await Promise.all([
-      Post.find(query)
-        .populate(
-          'videoId',
-          'cleanTitle originalName driveFileId thumbnailUrl duration resolution aiMetadata folderId folderName folderPathIds folderPathNames'
-        )
-        .populate('accountId', 'accountName platform profilePictureUrl username status')
-        .sort({ [sortField]: sortDir, _id: 1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Post.countDocuments(query),
-      aggregatePostCounts(countQuery),
-    ]);
+    const populateVideo = light
+      ? 'cleanTitle originalName folderId folderName'
+      : 'cleanTitle originalName driveFileId thumbnailUrl duration resolution aiMetadata folderId folderName folderPathIds folderPathNames';
+    const populateAccount = light
+      ? 'accountName platform status'
+      : 'accountName platform profilePictureUrl username status';
+
+    const postsPromise = Post.find(query)
+      .populate('videoId', populateVideo)
+      .populate('accountId', populateAccount)
+      .sort({ [sortField]: sortDir, _id: 1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    const totalPromise = Post.countDocuments(query);
+    const countsPromise = includeCounts
+      ? aggregatePostCounts((() => {
+          const countQuery = { ...query };
+          delete countQuery.status;
+          return countQuery;
+        })())
+      : Promise.resolve(null);
+
+    const [posts, total, counts] = await Promise.all([postsPromise, totalPromise, countsPromise]);
 
     res.json({
       status: 'success',
@@ -132,7 +167,7 @@ router.get('/', async (req, res, next) => {
         limit,
         totalPages: Math.ceil(total / limit) || 1,
       },
-      counts,
+      ...(counts ? { counts } : {}),
     });
   } catch (err) {
     next(err);
