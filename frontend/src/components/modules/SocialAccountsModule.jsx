@@ -831,9 +831,9 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
                 isLoading={isRefreshingTokens}
                 onClick={handleRefreshTokens}
                 className="text-xs font-semibold py-1.5 bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100 shadow-2xs cursor-pointer"
-                title="Refresh YouTube/Instagram tokens before they expire (runs automatically every 30 min on the server too)"
+                title="Auto-connect YouTube + Instagram + Google Drive (also runs every 15 min on the server)"
               >
-                Auto Refresh Tokens
+                Auto Connect All
               </Button>
               <Button
                 variant="secondary"
@@ -854,8 +854,10 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
       <div className="px-1 -mt-2 mb-2 text-[11px] text-slate-500 flex items-start gap-1.5">
         <Shield className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
         <span>
-          Auto token refresh runs every 30 minutes in the background so healthy accounts stay connected.
-          If a card already shows <span className="font-semibold text-amber-700">Token Expired / invalid_grant</span>, Google or Meta revoked the grant — use <span className="font-semibold">Reconnect Account</span> once (OAuth consent cannot be skipped).
+          Auto-connect runs every 15 minutes for YouTube, Instagram, and Google Drive Transfer.
+          Temporary network errors are healed automatically. Only revoked grants (
+          <span className="font-semibold text-amber-700">invalid_grant</span>
+          ) need a one-time <span className="font-semibold">Reconnect Account</span> / Connect Drive.
         </span>
       </div>
 

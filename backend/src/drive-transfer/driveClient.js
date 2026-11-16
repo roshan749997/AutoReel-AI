@@ -21,7 +21,71 @@ export function createOAuthClient(overrideRedirectUri = null) {
   return new google.auth.OAuth2(cfg.clientId, cfg.clientSecret, redirectUri);
 }
 
+/**
+ * Proactively refresh Drive Transfer tokens before expiry.
+ * Also attempts recovery when status is expired but refresh_token still exists.
+ */
+export async function ensureDriveCredentialFresh({ force = false, skewMs = 30 * 60 * 1000 } = {}) {
+  const credential = await DriveTransferCredential.findOne({
+    kind: 'operator',
+    status: { $in: ['connected', 'expired'] },
+  });
+  if (!credential) {
+    return { refreshed: false, connected: false, reason: 'not_connected' };
+  }
+
+  const tokens = credential.getTokens();
+  if (!tokens.refreshToken) {
+    return {
+      refreshed: false,
+      connected: credential.status === 'connected',
+      reason: 'no_refresh_token',
+      needsReconnect: true,
+    };
+  }
+
+  const expiresAt = credential.tokenExpiresAt ? new Date(credential.tokenExpiresAt).getTime() : null;
+  const needsRefresh = force || !expiresAt || Date.now() >= expiresAt - skewMs || credential.status === 'expired';
+  if (!needsRefresh) {
+    return { refreshed: false, connected: true, reason: 'still_valid' };
+  }
+
+  const oauth2 = createOAuthClient();
+  oauth2.setCredentials({
+    access_token: tokens.accessToken,
+    refresh_token: tokens.refreshToken,
+    expiry_date: expiresAt || undefined,
+  });
+
+  try {
+    const { credentials } = await oauth2.refreshAccessToken();
+    credential.setTokens(
+      credentials.access_token,
+      credentials.refresh_token || tokens.refreshToken,
+      credentials.expiry_date || null
+    );
+    credential.status = 'connected';
+    credential.errorMessage = undefined;
+    await credential.save();
+    return { refreshed: true, connected: true, reason: 'refreshed' };
+  } catch (err) {
+    credential.status = 'expired';
+    credential.errorMessage = `Drive token refresh failed: ${err.message}. Connect Drive again.`;
+    await credential.save().catch(() => {});
+    return {
+      refreshed: false,
+      connected: false,
+      reason: 'refresh_failed',
+      needsReconnect: true,
+      error: err.message,
+    };
+  }
+}
+
 export async function getAuthorizedDrive() {
+  // Keep Drive alive automatically before each use
+  await ensureDriveCredentialFresh();
+
   const credential = await DriveTransferCredential.findOne({ kind: 'operator', status: 'connected' });
   if (!credential) {
     const error = new Error('Connect Drive Transfer before copying. This does not use the YouTube account connection.');
@@ -42,6 +106,7 @@ export async function getAuthorizedDrive() {
     if (!next?.access_token) return;
     credential.setTokens(next.access_token, next.refresh_token || null, next.expiry_date || null);
     credential.status = 'connected';
+    credential.errorMessage = undefined;
     credential.save().catch(() => {});
   });
 

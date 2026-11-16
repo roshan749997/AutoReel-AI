@@ -351,18 +351,20 @@ router.patch('/:id/preferences', async (req, res, next) => {
   }
 });
 
-// Proactively refresh OAuth access tokens for all connected social accounts
+// Auto-connect / refresh YouTube + Instagram + Google Drive tokens
 router.post('/refresh-tokens', async (req, res, next) => {
   try {
     const force = req.body?.force === true || req.query?.force === 'true';
-    const summary = await tokenRefreshService.refreshDueAccounts({ force });
+    const summary = await tokenRefreshService.refreshAllConnections({ force });
     const needsReconnect = summary.needsReconnect?.length || 0;
+    const healed = summary.healed || 0;
+    const refreshed = summary.refreshed || 0;
     res.json({
       status: 'success',
       message:
         needsReconnect > 0
-          ? `Refreshed ${summary.refreshed || 0} token(s). ${needsReconnect} account(s) still need manual Reconnect (revoked/expired grant).`
-          : `Checked ${summary.checked || 0} account(s): ${summary.refreshed || 0} refreshed, ${summary.skipped || 0} still valid.`,
+          ? `Auto-connect: refreshed ${refreshed}, healed ${healed}. ${needsReconnect} still need one manual Reconnect (revoked grant).`
+          : `Auto-connect OK: refreshed ${refreshed}, healed ${healed}, others still valid (YouTube + Instagram + Drive).`,
       data: summary,
     });
   } catch (err) {
