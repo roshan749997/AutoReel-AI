@@ -332,6 +332,85 @@ export class InstagramService {
     return flow === 'facebook_login' ? FACEBOOK_GRAPH_BASE : INSTAGRAM_GRAPH_BASE;
   }
 
+  /**
+   * Refresh Instagram long-lived tokens before the ~60-day cliff.
+   * Instagram Login: ig_refresh_token. Facebook Login: fb_exchange_token.
+   * Meta requires the token to still be valid (not already expired).
+   */
+  async ensureFreshAccessToken(account) {
+    const { accessToken } = account.getTokens();
+    if (!accessToken) {
+      throw new Error('No access token available. Please reconnect your account.');
+    }
+
+    const expiresAt = account.tokenExpiresAt ? new Date(account.tokenExpiresAt).getTime() : null;
+    if (!expiresAt) {
+      return accessToken;
+    }
+    const msRemaining = expiresAt - Date.now();
+    // Meta rejects refresh if token is already expired
+    if (msRemaining <= 0) {
+      account.status = 'expired';
+      account.errorMessage = 'Instagram long-lived token expired. Reconnect required.';
+      await account.save().catch(() => {});
+      throw new Error(account.errorMessage);
+    }
+    // Refresh when within 10 days of expiry
+    if (msRemaining >= 10 * 24 * 60 * 60 * 1000) {
+      return accessToken;
+    }
+
+    const flow = account.metadata?.authFlow || this.getAuthFlow();
+
+    try {
+      let refreshedToken = accessToken;
+      let expiresIn = null;
+
+      if (flow === 'facebook_login') {
+        const refreshRes = await axios.get(FACEBOOK_LOGIN_TOKEN_URL, {
+          params: {
+            grant_type: 'fb_exchange_token',
+            client_id: config.meta.appId,
+            client_secret: config.meta.appSecret,
+            fb_exchange_token: accessToken,
+          },
+        });
+        refreshedToken = refreshRes.data.access_token || accessToken;
+        expiresIn = refreshRes.data.expires_in;
+      } else {
+        const refreshRes = await axios.get(`${INSTAGRAM_GRAPH_BASE}/refresh_access_token`, {
+          params: {
+            grant_type: 'ig_refresh_token',
+            access_token: accessToken,
+          },
+        });
+        refreshedToken = refreshRes.data.access_token || accessToken;
+        expiresIn = refreshRes.data.expires_in;
+      }
+
+      account.setTokens(refreshedToken);
+      if (expiresIn) {
+        account.tokenExpiresAt = new Date(Date.now() + expiresIn * 1000);
+      }
+      account.status = 'connected';
+      account.errorMessage = null;
+      await account.save();
+      return refreshedToken;
+    } catch (err) {
+      const metaError = err.response?.data?.error;
+      const message = metaError?.message || err.message;
+      // Keep using current token if refresh fails for non-auth reasons (e.g. token too young)
+      if (metaError?.code === 190 || /expired|invalid/i.test(message)) {
+        account.status = 'expired';
+        account.errorMessage = `Instagram token refresh failed: ${message}. Reconnect required.`;
+        await account.save().catch(() => {});
+        throw new Error(account.errorMessage);
+      }
+      console.warn(`[Instagram] Token refresh skipped for ${account.accountId}: ${message}`);
+      return accessToken;
+    }
+  }
+
   async testConnection(account = null) {
     if (!config.meta.appId || !config.meta.appSecret) {
       return {
@@ -354,7 +433,7 @@ export class InstagramService {
     }
 
     try {
-      const { accessToken } = account.getTokens();
+      const accessToken = await this.ensureFreshAccessToken(account);
       if (!accessToken) {
         account.status = 'authorization_required';
         account.errorMessage = 'No access token available. Please reconnect your account.';
@@ -420,7 +499,7 @@ export class InstagramService {
    * Works seamlessly across both Instagram Login and Facebook Login endpoints.
    */
   async publishReel({ account, videoUrl, caption }) {
-    const { accessToken } = account.getTokens();
+    const accessToken = await this.ensureFreshAccessToken(account);
     const igUserId = account.accountId;
     const graphBase = this._getGraphBase(account);
 

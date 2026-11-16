@@ -9,35 +9,131 @@ import { AppError } from '../middleware/errorHandler.js';
 
 const router = Router();
 
-// 1. List posts with granular queue status filters, platform, accountId, and date ranges
+const UPCOMING_STATUSES = ['scheduled', 'queued', 'processing', 'retrying', 'paused', 'failed'];
+
+function buildPostListQuery(queryParams = {}) {
+  const query = {};
+
+  if (queryParams.status && queryParams.status !== 'all') {
+    if (queryParams.status === 'upcoming') {
+      query.status = { $in: UPCOMING_STATUSES };
+    } else if (String(queryParams.status).includes(',')) {
+      query.status = { $in: String(queryParams.status).split(',').map((s) => s.trim()).filter(Boolean) };
+    } else {
+      query.status = queryParams.status;
+    }
+  }
+
+  if (queryParams.platform && queryParams.platform !== 'all') {
+    query.platform = queryParams.platform;
+  }
+
+  if (queryParams.accountId && queryParams.accountId !== 'all') {
+    query.accountId = queryParams.accountId;
+  }
+
+  if (queryParams.from || queryParams.to) {
+    query.scheduledAt = {};
+    if (queryParams.from) query.scheduledAt.$gte = new Date(queryParams.from);
+    if (queryParams.to) query.scheduledAt.$lte = new Date(queryParams.to);
+  }
+
+  return query;
+}
+
+function emptyStatusCounts() {
+  return {
+    total: 0,
+    upcoming: 0,
+    draft: 0,
+    scheduled: 0,
+    queued: 0,
+    processing: 0,
+    retrying: 0,
+    paused: 0,
+    published: 0,
+    failed: 0,
+    cancelled: 0,
+    manual_review: 0,
+  };
+}
+
+async function aggregatePostCounts(baseQuery = {}) {
+  const match = { ...baseQuery };
+  delete match.status;
+
+  const rows = await Post.aggregate([
+    ...(Object.keys(match).length ? [{ $match: match }] : []),
+    { $group: { _id: '$status', count: { $sum: 1 } } },
+  ]);
+
+  const counts = emptyStatusCounts();
+  for (const row of rows) {
+    const key = row._id || 'unknown';
+    counts[key] = row.count;
+    counts.total += row.count;
+  }
+  counts.upcoming = UPCOMING_STATUSES.reduce((sum, status) => sum + (counts[status] || 0), 0);
+  return counts;
+}
+
+// Lightweight status counts for sidebar / overview (no post payloads)
+router.get('/stats', async (req, res, next) => {
+  try {
+    const baseQuery = buildPostListQuery({
+      platform: req.query.platform,
+      accountId: req.query.accountId,
+      from: req.query.from,
+      to: req.query.to,
+    });
+    delete baseQuery.status;
+
+    const counts = await aggregatePostCounts(baseQuery);
+    res.json({ status: 'success', data: counts });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 1. List posts with pagination + granular queue status filters
 router.get('/', async (req, res, next) => {
   try {
-    const query = {};
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit || '50', 10)), 200);
+    const skip = (page - 1) * limit;
+    const sortDir = req.query.sort === 'desc' ? -1 : 1;
+    const sortField = req.query.sortBy === 'publishedAt' ? 'publishedAt' : 'scheduledAt';
 
-    if (req.query.status && req.query.status !== 'all') {
-      query.status = req.query.status;
-    }
+    const query = buildPostListQuery(req.query);
+    const countQuery = { ...query };
+    delete countQuery.status;
 
-    if (req.query.platform && req.query.platform !== 'all') {
-      query.platform = req.query.platform;
-    }
+    const [posts, total, counts] = await Promise.all([
+      Post.find(query)
+        .populate(
+          'videoId',
+          'cleanTitle originalName driveFileId thumbnailUrl duration resolution aiMetadata folderId folderName folderPathIds folderPathNames'
+        )
+        .populate('accountId', 'accountName platform profilePictureUrl username status')
+        .sort({ [sortField]: sortDir, _id: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Post.countDocuments(query),
+      aggregatePostCounts(countQuery),
+    ]);
 
-    if (req.query.accountId && req.query.accountId !== 'all') {
-      query.accountId = req.query.accountId;
-    }
-
-    if (req.query.from || req.query.to) {
-      query.scheduledAt = {};
-      if (req.query.from) query.scheduledAt.$gte = new Date(req.query.from);
-      if (req.query.to) query.scheduledAt.$lte = new Date(req.query.to);
-    }
-
-    const posts = await Post.find(query)
-      .populate('videoId', 'cleanTitle originalName driveFileId thumbnailUrl duration resolution aiMetadata folderId folderName folderPathIds folderPathNames')
-      .populate('accountId', 'accountName platform profilePictureUrl username status')
-      .sort({ scheduledAt: 1 });
-
-    res.json({ status: 'success', data: posts });
+    res.json({
+      status: 'success',
+      data: posts,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+      counts,
+    });
   } catch (err) {
     next(err);
   }

@@ -30,12 +30,17 @@ import { api } from '../../api/client.js';
 import { ChannelSwitcher } from '../common/ChannelSwitcher.jsx';
 import { channelTitle, findPairForPost } from '../../utils/channelPairs.js';
 
-export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onNavigate }) => {
+export const PublishingQueueModule = ({ accounts = [], onReload, onNavigate }) => {
   const [filterStatus, setFilterStatus] = useState('upcoming');
   const [accountFilter, setAccountFilter] = useState('all');
   const [channelFilter, setChannelFilter] = useState('');
   const [channelPairs, setChannelPairs] = useState([]);
   const [platformFilter, setPlatformFilter] = useState('all');
+  const [page, setPage] = useState(1);
+  const [posts, setPosts] = useState([]);
+  const [pagination, setPagination] = useState({ total: 0, page: 1, limit: 40, totalPages: 1 });
+  const [counts, setCounts] = useState({ total: 0, upcoming: 0, failed: 0, published: 0, cancelled: 0, paused: 0 });
+  const [isLoadingPosts, setIsLoadingPosts] = useState(true);
   const [activeLogPost, setActiveLogPost] = useState(null);
   const [isActionLoading, setIsActionLoading] = useState(false);
 
@@ -52,6 +57,8 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
     timezone: 'UTC',
   });
 
+  const PAGE_SIZE = 40;
+
   useEffect(() => {
     let cancelled = false;
     api.getChannelPairs()
@@ -66,9 +73,66 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
     };
   }, []);
 
-  const upcomingStatuses = ['scheduled', 'queued', 'processing', 'retrying', 'paused', 'failed'];
-  const failedPosts = posts.filter((p) => p.status === 'failed');
-  const failedCount = failedPosts.length;
+  const loadPosts = async () => {
+    setIsLoadingPosts(true);
+    try {
+      const params = {
+        page,
+        limit: PAGE_SIZE,
+        status: filterStatus === 'all' ? undefined : filterStatus,
+        platform: platformFilter !== 'all' ? platformFilter : undefined,
+        accountId: accountFilter !== 'all' ? accountFilter : undefined,
+      };
+
+      // Channel filter maps to the linked YT/IG account ids for that folder
+      if (channelFilter) {
+        const pair = channelPairs.find((p) => String(p.folderId) === String(channelFilter));
+        const linkedId = pair?.youtubeAccountId || pair?.instagramAccountId;
+        if (linkedId && accountFilter === 'all') {
+          params.accountId = linkedId;
+        }
+      }
+
+      const res = await api.getPosts(params);
+      let rows = res.data || [];
+
+      // If both YT+IG linked, fetch second account page merge for same folder (capped)
+      if (channelFilter) {
+        const pair = channelPairs.find((p) => String(p.folderId) === String(channelFilter));
+        if (pair?.youtubeAccountId && pair?.instagramAccountId && accountFilter === 'all') {
+          const otherId =
+            String(params.accountId) === String(pair.youtubeAccountId)
+              ? pair.instagramAccountId
+              : pair.youtubeAccountId;
+          const other = await api.getPosts({ ...params, accountId: otherId, page: 1 });
+          const seen = new Set(rows.map((p) => p._id));
+          for (const post of other.data || []) {
+            if (!seen.has(post._id)) rows.push(post);
+          }
+          rows = rows.filter((post) => {
+            const matched = findPairForPost(channelPairs, post);
+            return matched && String(matched.folderId) === String(channelFilter);
+          });
+        }
+      }
+
+      setPosts(rows);
+      setPagination(res.pagination || { total: rows.length, page, limit: PAGE_SIZE, totalPages: 1 });
+      if (res.counts) setCounts(res.counts);
+    } catch (err) {
+      console.error('[Queue] Failed to load posts:', err);
+      setPosts([]);
+    } finally {
+      setIsLoadingPosts(false);
+    }
+  };
+
+  useEffect(() => {
+    loadPosts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterStatus, platformFilter, accountFilter, channelFilter, page, channelPairs]);
+
+  const failedCount = counts.failed || 0;
 
   const statusLabels = {
     upcoming: 'To publish',
@@ -79,20 +143,13 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
     paused: 'Paused',
   };
 
-  const filteredPosts = posts.filter((p) => {
-    if (filterStatus === 'upcoming' && !upcomingStatuses.includes(p.status)) return false;
-    if (filterStatus !== 'upcoming' && filterStatus !== 'all' && p.status !== filterStatus) return false;
-    if (platformFilter !== 'all' && p.platform !== platformFilter) return false;
-    if (accountFilter !== 'all') {
-      const accId = p.accountId?._id || p.accountId;
-      if (accId !== accountFilter) return false;
-    }
-    if (channelFilter) {
-      const pair = findPairForPost(channelPairs, p);
-      if (!pair || String(pair.folderId) !== String(channelFilter)) return false;
-    }
-    return true;
-  });
+  const tabCount = (id) => {
+    if (id === 'all') return counts.total || 0;
+    if (id === 'upcoming') return counts.upcoming || 0;
+    return counts[id] || 0;
+  };
+
+  const filteredPosts = posts;
 
   const accountGroups = [];
   const seenAccounts = new Map();
@@ -117,11 +174,16 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
   }
 
   // Action handlers
+  const refreshQueue = async () => {
+    await loadPosts();
+    if (onReload) onReload();
+  };
+
   const handlePause = async (id) => {
     try {
       setIsActionLoading(true);
       await api.pausePost(id);
-      if (onReload) onReload();
+      await refreshQueue();
     } catch (err) {
       alert(`Pause error: ${err.message}`);
     } finally {
@@ -133,7 +195,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
     try {
       setIsActionLoading(true);
       await api.resumePost(id);
-      if (onReload) onReload();
+      await refreshQueue();
     } catch (err) {
       alert(`Resume error: ${err.message}`);
     } finally {
@@ -147,7 +209,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
     try {
       setIsActionLoading(true);
       await api.cancelPost(id, reason);
-      if (onReload) onReload();
+      await refreshQueue();
     } catch (err) {
       alert(`Cancel error: ${err.message}`);
     } finally {
@@ -159,7 +221,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
     try {
       setIsActionLoading(true);
       await api.retryPost(id);
-      if (onReload) onReload();
+      await refreshQueue();
       alert('Post reset for queue processing.');
     } catch (err) {
       alert(`Retry error: ${err.message}`);
@@ -174,7 +236,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
       setIsActionLoading(true);
       const res = await api.retryAllFailed();
       alert(res.message || 'All failed posts reset for retry.');
-      if (onReload) onReload();
+      await refreshQueue();
     } catch (err) {
       alert(`Retry all failed error: ${err.message}`);
     } finally {
@@ -198,7 +260,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
         timezone: rescheduleTimezone,
       });
       setReschedulePostItem(null);
-      if (onReload) onReload();
+      await refreshQueue();
       alert('Post rescheduled successfully.');
     } catch (err) {
       alert(`Reschedule error: ${err.message}`);
@@ -229,7 +291,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
         timezone: editForm.timezone,
       });
       setEditPostItem(null);
-      if (onReload) onReload();
+      await refreshQueue();
       alert('Post details updated.');
     } catch (err) {
       alert(`Update error: ${err.message}`);
@@ -243,7 +305,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
     try {
       setIsActionLoading(true);
       await api.deletePost(id);
-      if (onReload) onReload();
+      await refreshQueue();
     } catch (err) {
       alert(`Delete error: ${err.message}`);
     } finally {
@@ -260,7 +322,8 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
       setIsActionLoading(true);
       const res = await api.purgePosts(purgeAll ? { all: 'true' } : {});
       alert(res.message || 'Publishing queue cleaned successfully!');
-      if (onReload) onReload();
+      setPage(1);
+      await refreshQueue();
     } catch (err) {
       alert(`Clear queue error: ${err.message}`);
     } finally {
@@ -274,7 +337,7 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
       setIsActionLoading(true);
       const res = await api.publishNow(id);
       alert(res.message || 'Publish executed successfully!');
-      if (onReload) onReload();
+      await refreshQueue();
     } catch (err) {
       alert(`Publish error: ${err.message}`);
     } finally {
@@ -357,9 +420,9 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-semibold text-slate-900">Where each video is going</h3>
               <span className="text-xs px-2 py-0.5 rounded bg-white border border-slate-200 text-slate-400">
-                {posts.length} posts
+                {counts.total || 0} posts
               </span>
-              {posts.length > 0 && (
+              {(counts.total || 0) > 0 && (
                 <button
                   type="button"
                   onClick={() => handlePurgeQueue(false)}
@@ -380,17 +443,16 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
             <div className="flex flex-wrap items-center gap-1 bg-slate-50 p-1 rounded-lg border border-slate-200 text-xs max-w-full overflow-x-auto">
               {Object.entries(statusLabels).map(([id, label]) => {
-                const count = posts.filter((post) => {
-                  if (id === 'all') return true;
-                  if (id === 'upcoming') return upcomingStatuses.includes(post.status);
-                  return post.status === id;
-                }).length;
+                const count = tabCount(id);
                 const isFailedTab = id === 'failed';
                 const hasFailed = isFailedTab && count > 0;
                 return (
                   <button
                     key={id}
-                    onClick={() => setFilterStatus(id)}
+                    onClick={() => {
+                      setFilterStatus(id);
+                      setPage(1);
+                    }}
                     className={`px-2.5 py-1 rounded-md font-medium text-[11px] transition-colors whitespace-nowrap flex items-center gap-1.5 ${
                       filterStatus === id
                         ? isFailedTab
@@ -421,7 +483,10 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
             <div className="flex items-center gap-1.5">
               <select
                 value={platformFilter}
-                onChange={(e) => setPlatformFilter(e.target.value)}
+                onChange={(e) => {
+                  setPlatformFilter(e.target.value);
+                  setPage(1);
+                }}
                 className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-700 focus:outline-none"
               >
                 <option value="all">All Platforms</option>
@@ -432,7 +497,10 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
               {accounts.length > 0 && (
                 <select
                   value={accountFilter}
-                  onChange={(e) => setAccountFilter(e.target.value)}
+                  onChange={(e) => {
+                    setAccountFilter(e.target.value);
+                    setPage(1);
+                  }}
                   className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-700 focus:outline-none max-w-[150px] truncate"
                 >
                   <option value="all">All Accounts</option>
@@ -451,7 +519,10 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
             pairs={channelPairs}
             accounts={accounts}
             selectedFolderId={channelFilter}
-            onSelect={setChannelFilter}
+            onSelect={(folderId) => {
+              setChannelFilter(folderId);
+              setPage(1);
+            }}
             onOpenChannels={onNavigate ? () => onNavigate('channels') : undefined}
           />
         </div>
@@ -461,10 +532,15 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
       <Card>
         <CardHeader
           title="Posts by channel"
-          subtitle={`${filteredPosts.length} showing. Each block is one Drive folder and the accounts linked to it.`}
+          subtitle={`${filteredPosts.length} on this page · ${pagination.total || 0} match filters. Each block is one Drive folder and the accounts linked to it.`}
         />
 
-        {filteredPosts.length === 0 ? (
+        {isLoadingPosts ? (
+          <div className="py-12 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+            <RefreshCw className="w-4 h-4 animate-spin" />
+            Loading queue...
+          </div>
+        ) : filteredPosts.length === 0 ? (
           <EmptyState
             icon={ListVideo}
             title="Nothing in this view"
@@ -722,6 +798,34 @@ export const PublishingQueueModule = ({ posts = [], accounts = [], onReload, onN
             })}
               </section>
             ))}
+
+            {(pagination.totalPages || 1) > 1 && (
+              <div className="flex items-center justify-between pt-2 border-t border-slate-200">
+                <p className="text-[11px] text-slate-500">
+                  Page {pagination.page || page} of {pagination.totalPages || 1}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={page <= 1 || isLoadingPosts}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    className="text-xs py-1"
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={page >= (pagination.totalPages || 1) || isLoadingPosts}
+                    onClick={() => setPage((p) => p + 1)}
+                    className="text-xs py-1"
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </Card>

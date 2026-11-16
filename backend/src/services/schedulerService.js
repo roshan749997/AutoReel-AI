@@ -359,16 +359,21 @@ export class SchedulerService {
     try {
       const now = new Date();
 
-      // Find due posts: scheduledAt <= now OR nextRetryAt <= now
-      // Strictly prevent endless loop:
-      // - Candidate status: 'scheduled', 'queued', or 'retrying'
+      // Find due posts with backoff respected:
+      // - scheduled/queued: due when scheduledAt <= now
+      // - retrying: due ONLY when nextRetryAt <= now (do not match on stale scheduledAt)
       // - Exclude jobs where attempts >= maxAttempts
       const candidatePosts = await Post.find({
-        status: { $in: ['scheduled', 'queued', 'retrying'] },
         $expr: { $lt: ['$attempts', '$maxAttempts'] },
         $or: [
-          { scheduledAt: { $lte: now } },
-          { nextRetryAt: { $lte: now } },
+          {
+            status: { $in: ['scheduled', 'queued'] },
+            scheduledAt: { $lte: now },
+          },
+          {
+            status: 'retrying',
+            nextRetryAt: { $lte: now },
+          },
         ],
       })
         .sort({ scheduledAt: 1 })
@@ -403,12 +408,24 @@ export class SchedulerService {
    * Uses findOneAndUpdate with status and attempt filters so two workers can NEVER claim the same post.
    */
   async claimAndProcess(candidate) {
+    const now = new Date();
+    const claimFilter =
+      candidate.status === 'retrying'
+        ? {
+            _id: candidate._id,
+            status: 'retrying',
+            nextRetryAt: { $lte: now },
+            $expr: { $lt: ['$attempts', '$maxAttempts'] },
+          }
+        : {
+            _id: candidate._id,
+            status: { $in: ['scheduled', 'queued'] },
+            scheduledAt: { $lte: now },
+            $expr: { $lt: ['$attempts', '$maxAttempts'] },
+          };
+
     const post = await Post.findOneAndUpdate(
-      {
-        _id: candidate._id,
-        status: { $in: ['scheduled', 'queued', 'retrying'] },
-        $expr: { $lt: ['$attempts', '$maxAttempts'] },
-      },
+      claimFilter,
       {
         $set: {
           status: 'processing',

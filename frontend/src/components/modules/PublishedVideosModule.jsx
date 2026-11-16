@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   CheckCircle2,
   Youtube,
@@ -22,10 +22,9 @@ import { Badge } from '../common/Badge.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
 import { Modal } from '../common/Modal.jsx';
 import { ChannelAvatar } from '../common/ChannelAvatar.jsx';
-import { getVideoThumbnailUrl } from '../../api/client.js';
+import { api, getVideoThumbnailUrl } from '../../api/client.js';
 
 export const PublishedVideosModule = ({
-  posts = [],
   accounts = [],
   onReload,
   onNavigate,
@@ -33,34 +32,55 @@ export const PublishedVideosModule = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [platformFilter, setPlatformFilter] = useState('all');
   const [accountFilter, setAccountFilter] = useState('all');
+  const [page, setPage] = useState(1);
+  const [publishedPosts, setPublishedPosts] = useState([]);
+  const [pagination, setPagination] = useState({ total: 0, page: 1, limit: 48, totalPages: 1 });
+  const [counts, setCounts] = useState({ published: 0 });
+  const [isLoading, setIsLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [selectedPostDetails, setSelectedPostDetails] = useState(null);
 
-  // Filter only published posts
-  const publishedPosts = useMemo(() => {
-    return (posts || []).filter((p) => p.status === 'published');
-  }, [posts]);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setIsLoading(true);
+      try {
+        const res = await api.getPosts({
+          status: 'published',
+          platform: platformFilter !== 'all' ? platformFilter : undefined,
+          accountId: accountFilter !== 'all' ? accountFilter : undefined,
+          page,
+          limit: 48,
+          sort: 'desc',
+          sortBy: 'publishedAt',
+        });
+        if (cancelled) return;
+        setPublishedPosts(res.data || []);
+        setPagination(res.pagination || { total: 0, page: 1, limit: 48, totalPages: 1 });
+        if (res.counts) setCounts(res.counts);
+      } catch (err) {
+        if (!cancelled) setPublishedPosts([]);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [platformFilter, accountFilter, page, refreshKey]);
 
-  // Statistics
+  // Statistics from server counts when unfiltered; else page-local fallback
   const stats = useMemo(() => {
-    const total = publishedPosts.length;
+    const total = counts.published || pagination.total || publishedPosts.length;
     const ytCount = publishedPosts.filter((p) => p.platform === 'youtube').length;
     const igCount = publishedPosts.filter((p) => p.platform === 'instagram').length;
     return { total, ytCount, igCount };
-  }, [publishedPosts]);
+  }, [publishedPosts, counts, pagination.total]);
 
-  // Filtered published posts
+  // Client search on current page (keeps payload small)
   const filteredPosts = useMemo(() => {
     return publishedPosts.filter((p) => {
-      // Platform filter
-      if (platformFilter !== 'all' && p.platform !== platformFilter) return false;
-
-      // Account filter
-      if (accountFilter !== 'all') {
-        const accId = p.accountId?._id || p.accountId;
-        if (accId !== accountFilter) return false;
-      }
-
-      // Search filter
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
         const titleMatch = (p.title || '').toLowerCase().includes(q);
@@ -71,10 +91,9 @@ export const PublishedVideosModule = ({
           return false;
         }
       }
-
       return true;
-    }).sort((a, b) => new Date(b.publishedAt || b.updatedAt) - new Date(a.publishedAt || a.updatedAt));
-  }, [publishedPosts, platformFilter, accountFilter, searchQuery]);
+    });
+  }, [publishedPosts, searchQuery]);
 
   const formatPublishDate = (dateStr) => {
     if (!dateStr) return 'Recently';
@@ -110,17 +129,19 @@ export const PublishedVideosModule = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {onReload && (
-            <Button
-              variant="outline"
-              size="sm"
-              icon={RefreshCw}
-              onClick={onReload}
-              className="text-slate-700 hover:text-slate-900"
-            >
-              Refresh
-            </Button>
-          )}
+          <Button
+            variant="outline"
+            size="sm"
+            icon={RefreshCw}
+            onClick={() => {
+              setRefreshKey((k) => k + 1);
+              if (onReload) onReload();
+            }}
+            className="text-slate-700 hover:text-slate-900"
+            disabled={isLoading}
+          >
+            Refresh
+          </Button>
           {onNavigate && (
             <Button
               variant="primary"
@@ -199,7 +220,10 @@ export const PublishedVideosModule = ({
           <div className="flex items-center gap-1.5 bg-slate-50 p-1 rounded-lg border border-slate-200 self-start sm:self-auto">
             <button
               type="button"
-              onClick={() => setPlatformFilter('all')}
+              onClick={() => {
+                setPlatformFilter('all');
+                setPage(1);
+              }}
               className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
                 platformFilter === 'all'
                   ? 'bg-indigo-600 text-white'
@@ -210,7 +234,10 @@ export const PublishedVideosModule = ({
             </button>
             <button
               type="button"
-              onClick={() => setPlatformFilter('youtube')}
+              onClick={() => {
+                setPlatformFilter('youtube');
+                setPage(1);
+              }}
               className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 ${
                 platformFilter === 'youtube'
                   ? 'bg-rose-600 text-white'
@@ -222,7 +249,10 @@ export const PublishedVideosModule = ({
             </button>
             <button
               type="button"
-              onClick={() => setPlatformFilter('instagram')}
+              onClick={() => {
+                setPlatformFilter('instagram');
+                setPage(1);
+              }}
               className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 ${
                 platformFilter === 'instagram'
                   ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white'
@@ -238,7 +268,10 @@ export const PublishedVideosModule = ({
           {accounts.length > 0 && (
             <select
               value={accountFilter}
-              onChange={(e) => setAccountFilter(e.target.value)}
+              onChange={(e) => {
+                setAccountFilter(e.target.value);
+                setPage(1);
+              }}
               className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs text-slate-700 focus:outline-none focus:border-indigo-500/60"
             >
               <option value="all">All Channels & Accounts</option>
@@ -254,7 +287,12 @@ export const PublishedVideosModule = ({
       </Card>
 
       {/* 4. Published Cards Grid */}
-      {filteredPosts.length === 0 ? (
+      {isLoading ? (
+        <div className="py-16 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+          <RefreshCw className="w-4 h-4 animate-spin" />
+          Loading published posts...
+        </div>
+      ) : filteredPosts.length === 0 ? (
         <EmptyState
           icon={CheckCircle2}
           title={publishedPosts.length === 0 ? 'No Published Videos Yet' : 'No Videos Found'}
@@ -271,6 +309,7 @@ export const PublishedVideosModule = ({
               setSearchQuery('');
               setPlatformFilter('all');
               setAccountFilter('all');
+              setPage(1);
             }
           }}
         />
@@ -430,6 +469,34 @@ export const PublishedVideosModule = ({
               </Card>
             );
           })}
+        </div>
+      )}
+
+      {(pagination.totalPages || 1) > 1 && (
+        <div className="flex items-center justify-between">
+          <p className="text-[11px] text-slate-500">
+            Page {pagination.page || page} of {pagination.totalPages || 1} · {pagination.total || 0} published
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={page <= 1 || isLoading}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="text-xs py-1"
+            >
+              Previous
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={page >= (pagination.totalPages || 1) || isLoading}
+              onClick={() => setPage((p) => p + 1)}
+              className="text-xs py-1"
+            >
+              Next
+            </Button>
+          </div>
         </div>
       )}
 

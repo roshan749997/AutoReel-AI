@@ -746,16 +746,55 @@ test("Scheduler: Polls and claims due jobs in 'queued' status as well as 'schedu
     maxAttempts: 3,
   });
 
-  // Verify candidate query picks it up
+  // Verify candidate query picks it up (must match schedulerService.processDuePosts filter)
+  const now = new Date();
   const candidates = await Post.find({
-    status: { $in: ['scheduled', 'queued', 'retrying'] },
     $expr: { $lt: ['$attempts', '$maxAttempts'] },
-    $or: [{ scheduledAt: { $lte: new Date() } }, { nextRetryAt: { $lte: new Date() } }],
+    $or: [
+      { status: { $in: ['scheduled', 'queued'] }, scheduledAt: { $lte: now } },
+      { status: 'retrying', nextRetryAt: { $lte: now } },
+    ],
   });
 
   const found = candidates.find((c) => c._id.toString() === post._id.toString());
   assert.ok(found, "Due candidate query must include jobs with status 'queued'");
   assert.equal(found.status, 'queued');
+
+  await Post.deleteOne({ _id: post._id });
+  await Video.deleteOne({ _id: video._id });
+  await Account.deleteOne({ _id: account._id });
+});
+
+// Retry backoff: retrying posts must wait for nextRetryAt (ignore stale scheduledAt)
+test('Scheduler Due Query: retrying posts with future nextRetryAt are not claimed early', async () => {
+  const { video, account } = await createFixtures({ approvalStatus: 'approved' });
+  const pastDate = new Date(Date.now() - 60_000);
+  const futureRetry = new Date(Date.now() + 120_000);
+
+  const post = await Post.create({
+    videoId: video._id,
+    accountId: account._id,
+    platform: 'youtube',
+    title: 'Retry Backoff Guard',
+    scheduledAt: pastDate,
+    status: 'retrying',
+    publishingStatus: 'ready_for_dispatch',
+    attempts: 1,
+    maxAttempts: 3,
+    nextRetryAt: futureRetry,
+  });
+
+  const now = new Date();
+  const candidates = await Post.find({
+    $expr: { $lt: ['$attempts', '$maxAttempts'] },
+    $or: [
+      { status: { $in: ['scheduled', 'queued'] }, scheduledAt: { $lte: now } },
+      { status: 'retrying', nextRetryAt: { $lte: now } },
+    ],
+  });
+
+  const found = candidates.find((c) => c._id.toString() === post._id.toString());
+  assert.equal(found, undefined, 'Must not select retrying job before nextRetryAt');
 
   await Post.deleteOne({ _id: post._id });
   await Video.deleteOne({ _id: video._id });

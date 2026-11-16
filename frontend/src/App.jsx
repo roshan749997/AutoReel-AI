@@ -38,6 +38,14 @@ const getInitialTab = () => {
   return 'overview';
 };
 
+const emptyPostCounts = {
+  total: 0,
+  upcoming: 0,
+  queued: 0,
+  published: 0,
+  failed: 0,
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState(getInitialTab);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
@@ -52,7 +60,8 @@ export default function App() {
   const [accounts, setAccounts] = useState([]);
   const [videos, setVideos] = useState([]);
   const [videoPagination, setVideoPagination] = useState(null);
-  const [posts, setPosts] = useState([]);
+  const [upcomingPosts, setUpcomingPosts] = useState([]);
+  const [postCounts, setPostCounts] = useState(emptyPostCounts);
   const [logs, setLogs] = useState([]);
   const [n8nStatus, setN8nStatus] = useState(null);
   const [isSyncingDrive, setIsSyncingDrive] = useState(false);
@@ -61,43 +70,56 @@ export default function App() {
   const [videoFilters, setVideoFilters] = useState({ page: 1, limit: 12, search: '', status: '' });
   const [logFilters, setLogFilters] = useState({ page: 1, limit: 30, module: '', level: '' });
 
-  const loadData = useCallback(async (showRefreshingSpinner = false) => {
+  const loadDeferredMeta = useCallback(async () => {
+    const [integrationsSettled, checklistSettled, n8nSettled] = await Promise.allSettled([
+      api.getIntegrations(),
+      api.getSetupChecklist(),
+      api.getWorkflowStatus(),
+    ]);
+
+    if (integrationsSettled.status === 'fulfilled') setIntegrations(integrationsSettled.value?.integrations);
+    if (checklistSettled.status === 'fulfilled') setChecklist(checklistSettled.value);
+    if (n8nSettled.status === 'fulfilled') setN8nStatus(n8nSettled.value?.data || { isReachable: false });
+  }, []);
+
+  const loadCoreData = useCallback(async (showRefreshingSpinner = false) => {
     if (showRefreshingSpinner) setIsRefreshing(true);
     setBackendError(null);
 
     try {
-      // Execute all core queries concurrently for ultra-fast load
+      // Critical path only — no full posts dump, no n8n/integration probes
       const [
         healthSettled,
-        integrationsSettled,
-        checklistSettled,
         accountsSettled,
-        postsSettled,
+        postStatsSettled,
+        upcomingSettled,
         videosSettled,
         logsSettled,
-        n8nSettled,
       ] = await Promise.allSettled([
         api.getHealth(),
-        api.getIntegrations(),
-        api.getSetupChecklist(),
         api.getAccounts(),
-        api.getPosts(),
+        api.getPostStats(),
+        api.getPosts({ status: 'upcoming', limit: 20, page: 1 }),
         api.getVideos(videoFilters),
         api.getLogs(logFilters),
-        api.getWorkflowStatus(),
       ]);
 
       if (healthSettled.status === 'fulfilled') setHealthData(healthSettled.value);
-      if (integrationsSettled.status === 'fulfilled') setIntegrations(integrationsSettled.value?.integrations);
-      if (checklistSettled.status === 'fulfilled') setChecklist(checklistSettled.value);
       if (accountsSettled.status === 'fulfilled') setAccounts(accountsSettled.value?.data || []);
-      if (postsSettled.status === 'fulfilled') setPosts(postsSettled.value?.data || []);
+      if (postStatsSettled.status === 'fulfilled') {
+        setPostCounts(postStatsSettled.value?.data || emptyPostCounts);
+      }
+      if (upcomingSettled.status === 'fulfilled') {
+        setUpcomingPosts(upcomingSettled.value?.data || []);
+        if (upcomingSettled.value?.counts) {
+          setPostCounts((prev) => ({ ...prev, ...upcomingSettled.value.counts }));
+        }
+      }
       if (videosSettled.status === 'fulfilled') {
         setVideos(videosSettled.value?.data || []);
         setVideoPagination(videosSettled.value?.pagination || {});
       }
       if (logsSettled.status === 'fulfilled') setLogs(logsSettled.value?.data || []);
-      if (n8nSettled.status === 'fulfilled') setN8nStatus(n8nSettled.value?.data || { isReachable: false });
 
       if (healthSettled.status === 'rejected') {
         setBackendError(
@@ -115,6 +137,12 @@ export default function App() {
     }
   }, [videoFilters, logFilters]);
 
+  const loadData = useCallback(async (showRefreshingSpinner = false) => {
+    await loadCoreData(showRefreshingSpinner);
+    // Heavy probes after first paint / core data
+    loadDeferredMeta();
+  }, [loadCoreData, loadDeferredMeta]);
+
   useEffect(() => {
     loadData();
 
@@ -123,12 +151,16 @@ export default function App() {
       setIsLoadingInitial(false);
     }, 3500);
 
-    const interval = setInterval(() => loadData(false), 30000); // 30s background sync
+    // Core refresh every 60s (was 30s + full 4k posts dump)
+    const interval = setInterval(() => loadCoreData(false), 60000);
+    const deferredInterval = setInterval(() => loadDeferredMeta(), 120000);
+
     return () => {
       clearTimeout(safetyTimer);
       clearInterval(interval);
+      clearInterval(deferredInterval);
     };
-  }, [loadData]);
+  }, [loadData, loadCoreData, loadDeferredMeta]);
 
   const handleSyncDrive = async () => {
     try {
@@ -149,13 +181,13 @@ export default function App() {
     aiProvider: integrations?.ai?.provider || 'Gemini',
   };
 
-  const failedPostsCount = posts.filter((p) => p.status === 'failed').length;
+  const failedPostsCount = postCounts.failed || 0;
 
   const stats = {
     indexedVideos: checklist?.stats?.indexedVideos ?? videos.length,
     connectedAccounts: accounts.length,
-    queuedPosts: posts.filter((p) => p.status === 'queued').length,
-    publishedPosts: posts.filter((p) => p.status === 'published').length,
+    queuedPosts: (postCounts.queued || 0) + (postCounts.scheduled || 0),
+    publishedPosts: postCounts.published || 0,
     failedPosts: failedPostsCount,
   };
 
@@ -206,7 +238,7 @@ export default function App() {
           {isLoadingInitial ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-3">
               <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
-              <p className="text-xs">Initializing dashboard and verifying official APIs...</p>
+              <p className="text-xs">Initializing dashboard...</p>
             </div>
           ) : (
             <div className="max-w-7xl mx-auto">
@@ -215,7 +247,7 @@ export default function App() {
                   integrations={integrations}
                   checklist={checklist}
                   stats={stats}
-                  upcomingPosts={posts.filter((p) => p.status === 'queued')}
+                  upcomingPosts={upcomingPosts.filter((p) => ['queued', 'scheduled', 'retrying'].includes(p.status))}
                   onNavigate={setActiveTab}
                   onSyncDrive={handleSyncDrive}
                 />
@@ -232,7 +264,6 @@ export default function App() {
               {activeTab === 'channels' && (
                 <ChannelsModule
                   accounts={accounts}
-                  posts={posts}
                   onNavigate={setActiveTab}
                 />
               )}
@@ -256,7 +287,6 @@ export default function App() {
 
               {activeTab === 'published' && (
                 <PublishedVideosModule
-                  posts={posts}
                   accounts={accounts}
                   onReload={loadData}
                   onNavigate={setActiveTab}
@@ -265,7 +295,6 @@ export default function App() {
 
               {activeTab === 'queue' && (
                 <PublishingQueueModule
-                  posts={posts}
                   accounts={accounts}
                   onReload={loadData}
                   onNavigate={setActiveTab}
@@ -274,7 +303,6 @@ export default function App() {
 
               {activeTab === 'calendar' && (
                 <CalendarModule
-                  posts={posts}
                   onNavigate={setActiveTab}
                 />
               )}

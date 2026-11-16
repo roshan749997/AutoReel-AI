@@ -150,8 +150,15 @@ export const api = {
   updateAiDraft: (videoId, updates) => request(`/ai/draft/${videoId}`, { method: 'PATCH', body: updates }),
 
   // Publishing Queue & Posts
-  getPosts: (params = {}) => {
+  getPostStats: (params = {}) => {
     const query = new URLSearchParams(params).toString();
+    return request(`/posts/stats${query ? `?${query}` : ''}`);
+  },
+  getPosts: (params = {}) => {
+    const cleaned = Object.fromEntries(
+      Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '')
+    );
+    const query = new URLSearchParams(cleaned).toString();
     return request(`/posts${query ? `?${query}` : ''}`);
   },
   createPost: (postData) => request('/posts', { method: 'POST', body: postData }),
