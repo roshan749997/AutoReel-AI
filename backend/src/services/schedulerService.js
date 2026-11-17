@@ -494,7 +494,11 @@ export class SchedulerService {
       }
 
       // 3. Account status & authorization validation
-      if (account.status !== 'connected' || !account.isActive) {
+      // Network-blip "error" accounts still have valid tokens — allow publish; only block real auth failures
+      const networkBlip =
+        account.status === 'error' &&
+        /ETIMEDOUT|ENETUNREACH|ECONNRESET|Temporary network|connect E|timeout/i.test(account.errorMessage || '');
+      if ((!account.isActive || (account.status !== 'connected' && !networkBlip))) {
         const err = new Error(`Target account "${account.accountName}" is disconnected (status: ${account.status})`);
         err.isPermanent = true;
         throw err;

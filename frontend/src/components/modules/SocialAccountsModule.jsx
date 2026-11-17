@@ -449,6 +449,13 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
             Auth Required
           </span>
         );
+      case 'error':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+            <span className="w-1.5 h-1.5 rounded-full bg-sky-500" />
+            Unstable
+          </span>
+        );
       case 'disconnected':
       default:
         return (
@@ -459,6 +466,11 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
         );
     }
   };
+
+  const isNetworkIssueAccount = (acc) =>
+    /ETIMEDOUT|ENETUNREACH|ECONNRESET|Temporary network|IPv4 retry|connect E|network issue/i.test(
+      acc?.errorMessage || ''
+    );
 
   return (
     <div className="space-y-6">
@@ -893,7 +905,11 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredAccounts.map((acc) => {
             const isYt = acc.platform === 'youtube';
-            const isAuthIssue = ['expired', 'authorization_required', 'permission_error', 'error'].includes(acc.status);
+            const networkIssue = isNetworkIssueAccount(acc);
+            const isAuthIssue =
+              !networkIssue &&
+              ['expired', 'authorization_required', 'permission_error'].includes(acc.status);
+            const isUnstable = networkIssue || acc.status === 'error';
             const channelUrl = isYt
               ? acc.accountId?.startsWith('UC')
                 ? `https://www.youtube.com/channel/${acc.accountId}`
@@ -910,6 +926,8 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
                 className={`rounded-2xl bg-white border transition-all duration-150 flex flex-col justify-between overflow-hidden shadow-2xs hover:shadow-md hover:-translate-y-0.5 ${
                   isAuthIssue
                     ? 'border-amber-300 ring-2 ring-amber-400/20'
+                    : isUnstable
+                    ? 'border-sky-300 ring-1 ring-sky-200/60'
                     : isYt
                     ? 'border-slate-200 hover:border-red-300'
                     : 'border-slate-200 hover:border-pink-300'
@@ -994,7 +1012,31 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
                     )}
                   </div>
 
-                  {/* Auth Issue Alert Box if expired */}
+                  {/* Network blip — NOT a real disconnect; auto-heal handles this */}
+                  {isUnstable && !isAuthIssue && (
+                    <div className="p-3 rounded-xl bg-sky-50 border border-sky-200 text-[11px] text-sky-900 space-y-2">
+                      <div className="flex items-start gap-1.5 font-semibold text-sky-800">
+                        <AlertTriangle className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
+                        <span>Temporary Network Issue</span>
+                      </div>
+                      <p className="text-[10px] text-sky-700 leading-tight">
+                        {acc.errorMessage ||
+                          'Render could not reach Meta/Google for a moment. Token is still saved — auto-connect will restore this. No reconnect needed.'}
+                      </p>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={RefreshCw}
+                        isLoading={isRefreshingTokens || testingId === acc._id}
+                        onClick={() => handleRefreshTokens()}
+                        className="w-full text-xs font-semibold py-1 bg-white border-sky-300 text-sky-900 hover:bg-sky-100/50 cursor-pointer"
+                      >
+                        Auto Connect Now
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Real auth expiry / revoked grant */}
                   {isAuthIssue && (
                     <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-[11px] text-amber-900 space-y-2">
                       <div className="flex items-start gap-1.5 font-semibold text-amber-800">

@@ -11,6 +11,8 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: NODE_OPTIONS
+        value: --dns-result-order=ipv4first
       - key: PORT
         value: 10000
       - key: CLIENT_URL

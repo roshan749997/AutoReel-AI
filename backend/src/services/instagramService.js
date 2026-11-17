@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { config } from '../config/env.js';
 import { ipv4HttpsAgent } from '../config/networkBootstrap.js';
+import { isTransientNetworkError } from '../utils/networkErrors.js';
 import { Account } from '../models/Account.js';
 import { WorkflowLog } from '../models/WorkflowLog.js';
 import { generateOAuthState } from './cryptoService.js';
@@ -23,16 +24,7 @@ const metaHttp = axios.create({
   validateStatus: (status) => status >= 200 && status < 500,
 });
 
-const isTransientNetworkError = (err) => {
-  const code = err?.code || err?.cause?.code || '';
-  const msg = err?.message || '';
-  return (
-    /ETIMEDOUT|ENETUNREACH|ECONNRESET|EAI_AGAIN|ECONNREFUSED|UND_ERR_CONNECT_TIMEOUT/i.test(code) ||
-    /ETIMEDOUT|ENETUNREACH|ECONNRESET|EAI_AGAIN|network|timeout/i.test(msg)
-  );
-};
-
-async function metaRequest(method, url, options = {}, retries = 2) {
+async function metaRequest(method, url, options = {}, retries = 3) {
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -440,8 +432,15 @@ export class InstagramService {
     } catch (err) {
       const metaError = err.response?.data?.error;
       const message = metaError?.message || err.message;
+
+      // Network blips — keep account connected, do not force reconnect
+      if (isTransientNetworkError(err)) {
+        console.warn(`[Instagram] Token refresh network blip for ${account.accountId}: ${message}`);
+        return accessToken;
+      }
+
       // Keep using current token if refresh fails for non-auth reasons (e.g. token too young)
-      if (metaError?.code === 190 || /expired|invalid/i.test(message)) {
+      if (metaError?.code === 190 || /OAuthException|invalid.*token|session.*(expired|invalid)/i.test(message)) {
         account.status = 'expired';
         account.errorMessage = `Instagram token refresh failed: ${message}. Reconnect required.`;
         await account.save().catch(() => {});
@@ -520,20 +519,28 @@ export class InstagramService {
       };
     } catch (err) {
       const metaError = err.response?.data?.error;
-      const isAuthError = metaError?.code === 190 || /OAuthException|invalid.*token|expired/i.test(err.message || '');
+      const isAuthError =
+        metaError?.code === 190 ||
+        /OAuthException|invalid.*token|session.*(expired|invalid)/i.test(err.message || '');
       const isNetwork = isTransientNetworkError(err);
 
-      // Network blips must NOT mark accounts expired — that forces unnecessary reconnects
+      // CRITICAL: network ≠ auth. Never demote to disconnected/expired/error on Meta reachability failures.
       if (isNetwork) {
-        account.errorMessage = `Temporary network issue reaching Meta (IPv4 retry applied): ${err.message}. Click Check again in a minute.`;
+        const hadTokens = Boolean(account.encryptedAccessToken);
+        if (hadTokens && account.status !== 'disconnected') {
+          account.status = 'connected';
+        }
+        account.errorMessage = null;
+        account.lastSyncedAt = new Date();
         await account.save().catch(() => {});
         return {
           configured: true,
-          connected: false,
+          connected: hadTokens,
           temporary: true,
+          networkIssue: true,
           status: account.status,
-          error: account.errorMessage,
-          message: account.errorMessage,
+          message:
+            'Temporary network issue reaching Meta (Render↔Instagram). Account stays connected — auto-retry will continue.',
         };
       }
 

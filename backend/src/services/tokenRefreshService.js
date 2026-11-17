@@ -2,6 +2,7 @@ import { Account } from '../models/Account.js';
 import { youtubeService } from './youtubeService.js';
 import { instagramService } from './instagramService.js';
 import { ensureDriveCredentialFresh } from '../drive-transfer/driveClient.js';
+import { looksLikeNetworkErrorMessage } from '../utils/networkErrors.js';
 
 /**
  * Background worker that keeps ALL integrations auto-connected:
@@ -26,8 +27,48 @@ export class TokenRefreshService {
     this.intervalMs = intervalMs;
     console.log(`[TokenRefresh] Auto-connect worker started (interval: ${intervalMs / 60000}m) — YouTube + Instagram + Drive`);
 
+    // Immediately undo false disconnects caused by Render↔Meta network blips
+    setTimeout(() => this.healNetworkFalseDisconnects(), 5_000);
     setTimeout(() => this.refreshAllConnections(), 15_000);
     this.timer = setInterval(() => this.refreshAllConnections(), this.intervalMs);
+  }
+
+  /**
+   * Accounts were wrongly marked error/disconnected when Meta was unreachable.
+   * If a token still exists and the error looks like ETIMEDOUT/ENETUNREACH, restore connected.
+   */
+  async healNetworkFalseDisconnects() {
+    try {
+      const candidates = await Account.find({
+        isActive: true,
+        encryptedAccessToken: { $exists: true, $nin: [null, ''] },
+        status: { $in: ['error', 'disconnected', 'authorization_required'] },
+      });
+
+      let healed = 0;
+      for (const account of candidates) {
+        const msg = account.errorMessage || '';
+        const realAuthFail =
+          /invalid_grant|OAuthException|session.*(expired|invalid)|no (access|refresh) token/i.test(msg) &&
+          !looksLikeNetworkErrorMessage(msg);
+        if (realAuthFail) continue;
+        if (!looksLikeNetworkErrorMessage(msg) && account.status !== 'error') continue;
+        if (account.status === 'error' && msg && !looksLikeNetworkErrorMessage(msg)) continue;
+
+        account.status = 'connected';
+        account.errorMessage = null;
+        await account.save();
+        healed += 1;
+      }
+
+      if (healed > 0) {
+        console.log(`[TokenRefresh] Healed ${healed} false disconnect(s) caused by network blips`);
+      }
+      return { healed };
+    } catch (err) {
+      console.warn(`[TokenRefresh] healNetworkFalseDisconnects failed: ${err.message}`);
+      return { healed: 0, error: err.message };
+    }
   }
 
   stop() {
@@ -56,6 +97,9 @@ export class TokenRefreshService {
     };
 
     try {
+      const falseDisconnectHeal = await this.healNetworkFalseDisconnects();
+      summary.healed += falseDisconnectHeal.healed || 0;
+
       // 1) Drive Transfer — separate from Social Accounts
       try {
         const driveResult = await ensureDriveCredentialFresh({ force, skewMs: this.youtubeSkewMs });
