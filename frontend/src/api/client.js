@@ -75,14 +75,14 @@ async function request(endpoint, options = {}) {
 
 export const api = {
   // Health & System
-  getHealth: () => request('/health'),
-  getIntegrations: () => request('/health/integrations'),
-  getSetupChecklist: () => request('/health/setup-checklist'),
+  getHealth: (options = {}) => request('/health', options),
+  getIntegrations: (options = {}) => request('/health/integrations', options),
+  getSetupChecklist: (options = {}) => request('/health/setup-checklist', options),
 
   // Social Accounts
-  getAccounts: (params = {}) => {
+  getAccounts: (params = {}, options = {}) => {
     const query = new URLSearchParams(params).toString();
-    return request(`/accounts${query ? `?${query}` : ''}`);
+    return request(`/accounts${query ? `?${query}` : ''}`, options);
   },
   getAccount: (id) => request(`/accounts/${id}`),
   updateAccountPreferences: (id, preferences) =>
@@ -91,6 +91,8 @@ export const api = {
   getYouTubeAuthUrl: () => request('/accounts/google/auth-url'),
   getMetaAuthUrl: () => request('/accounts/meta/auth-url'),
   testAccount: (id) => request(`/accounts/${id}/test`, { method: 'POST' }),
+  refreshAccountTokens: (force = false) =>
+    request('/accounts/refresh-tokens', { method: 'POST', body: { force } }),
   disconnectAccount: (id) => request(`/accounts/${id}/disconnect`, { method: 'POST' }),
   deleteAccount: (id) => request(`/accounts/${id}`, { method: 'DELETE' }),
   getAccountHistory: (id, params = {}) => {
@@ -124,9 +126,9 @@ export const api = {
     const query = new URLSearchParams(params).toString();
     return request(`/videos/stats${query ? `?${query}` : ''}`);
   },
-  getVideos: (params = {}) => {
+  getVideos: (params = {}, options = {}) => {
     const query = new URLSearchParams(params).toString();
-    return request(`/videos${query ? `?${query}` : ''}`);
+    return request(`/videos${query ? `?${query}` : ''}`, options);
   },
   getVideoIds: (params = {}) => {
     const query = new URLSearchParams(params).toString();
@@ -150,9 +152,16 @@ export const api = {
   updateAiDraft: (videoId, updates) => request(`/ai/draft/${videoId}`, { method: 'PATCH', body: updates }),
 
   // Publishing Queue & Posts
-  getPosts: (params = {}) => {
+  getPostStats: (params = {}, options = {}) => {
     const query = new URLSearchParams(params).toString();
-    return request(`/posts${query ? `?${query}` : ''}`);
+    return request(`/posts/stats${query ? `?${query}` : ''}`, options);
+  },
+  getPosts: (params = {}, options = {}) => {
+    const cleaned = Object.fromEntries(
+      Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '')
+    );
+    const query = new URLSearchParams(cleaned).toString();
+    return request(`/posts${query ? `?${query}` : ''}`, options);
   },
   createPost: (postData) => request('/posts', { method: 'POST', body: postData }),
   scheduleMultiPlatform: (postData) => request('/posts/multi-platform', { method: 'POST', body: postData }),
@@ -164,7 +173,12 @@ export const api = {
   reschedulePost: (id, data) => request(`/posts/${id}/reschedule`, { method: 'POST', body: data }),
   cancelPost: (id, reason) => request(`/posts/${id}/cancel`, { method: 'POST', body: { reason } }),
   retryPost: (id) => request(`/posts/${id}/retry`, { method: 'POST' }),
-  retryAllFailed: () => request('/posts/retry-all-failed', { method: 'POST' }),
+  retryAllFailed: (options = {}) =>
+    request('/posts/retry-all-failed', {
+      method: 'POST',
+      body: options,
+      timeoutMs: 180000,
+    }),
   publishNow: (id) => request(`/posts/${id}/publish-now`, { method: 'POST' }),
   deletePost: (id) => request(`/posts/${id}`, { method: 'DELETE' }),
   purgePosts: (params = {}) => {
@@ -177,9 +191,9 @@ export const api = {
   triggerWorkflow: (payload) => request('/workflows/trigger', { method: 'POST', body: payload }),
 
   // Audit Logs
-  getLogs: (params = {}) => {
+  getLogs: (params = {}, options = {}) => {
     const query = new URLSearchParams(params).toString();
-    return request(`/logs${query ? `?${query}` : ''}`);
+    return request(`/logs${query ? `?${query}` : ''}`, options);
   },
   clearLogs: () => request('/logs', { method: 'DELETE' }),
 };

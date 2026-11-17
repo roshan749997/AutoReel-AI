@@ -40,7 +40,7 @@ router.get('/status', async (req, res) => {
   let error = null;
 
   try {
-    const response = await axios.get('http://127.0.0.1:5678/healthz', { timeout: 2000 });
+    const response = await axios.get('http://127.0.0.1:5678/healthz', { timeout: 400 });
     isReachable = response.status === 200;
     statusInfo = response.data;
   } catch (err) {

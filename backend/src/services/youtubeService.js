@@ -164,6 +164,48 @@ export class YouTubeService {
     return savedAccounts[0]; // Primary account returned
   }
 
+  /**
+   * Proactively refresh YouTube access tokens before/at expiry using the stored refresh_token.
+   * Returns { refreshed: boolean }. Throws / marks expired when Google rejects the grant.
+   */
+  async refreshAccessTokenIfNeeded(account, { skewMs = 10 * 60 * 1000, force = false } = {}) {
+    const { accessToken, refreshToken } = account.getTokens();
+    if (!refreshToken) {
+      const err = new Error('No refresh token available. Reconnect required.');
+      err.code = 'NO_REFRESH_TOKEN';
+      throw err;
+    }
+
+    const expiresAt = account.tokenExpiresAt ? new Date(account.tokenExpiresAt).getTime() : null;
+    const needsRefresh =
+      force || !expiresAt || Date.now() >= expiresAt - skewMs;
+
+    if (!needsRefresh) {
+      return { refreshed: false, accessToken };
+    }
+
+    const oauth2Client = this.getOAuthClient();
+    oauth2Client.setCredentials({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+
+    try {
+      const { credentials } = await oauth2Client.refreshAccessToken();
+      account.setTokens(credentials.access_token, credentials.refresh_token || refreshToken);
+      account.tokenExpiresAt = credentials.expiry_date ? new Date(credentials.expiry_date) : undefined;
+      account.status = 'connected';
+      account.errorMessage = null;
+      await account.save();
+      return { refreshed: true, accessToken: credentials.access_token, credentials };
+    } catch (refreshErr) {
+      account.status = 'expired';
+      account.errorMessage = `Token refresh failed: ${refreshErr.message}. Reconnect required.`;
+      await account.save();
+      throw refreshErr;
+    }
+  }
+
   async getAuthenticatedClient(account) {
     const oauth2Client = this.getOAuthClient();
     const { accessToken, refreshToken } = account.getTokens();
@@ -173,22 +215,18 @@ export class YouTubeService {
       refresh_token: refreshToken,
     });
 
-    // Check if token expired and refresh if necessary
-    if (account.tokenExpiresAt && new Date() >= new Date(account.tokenExpiresAt)) {
+    // Refresh when expired or within 10 minutes of expiry
+    if (account.tokenExpiresAt && new Date() >= new Date(new Date(account.tokenExpiresAt).getTime() - 10 * 60 * 1000)) {
       if (refreshToken) {
-        try {
-          const { credentials } = await oauth2Client.refreshAccessToken();
-          account.setTokens(credentials.access_token, credentials.refresh_token || refreshToken);
-          account.tokenExpiresAt = credentials.expiry_date ? new Date(credentials.expiry_date) : undefined;
-          account.status = 'connected';
-          account.errorMessage = null;
-          await account.save();
-          oauth2Client.setCredentials(credentials);
-        } catch (refreshErr) {
-          account.status = 'expired';
-          account.errorMessage = `Token refresh failed: ${refreshErr.message}. Reconnect required.`;
-          await account.save();
-          throw refreshErr;
+        const result = await this.refreshAccessTokenIfNeeded(account, { skewMs: 10 * 60 * 1000 });
+        if (result.credentials) {
+          oauth2Client.setCredentials(result.credentials);
+        } else {
+          const tokens = account.getTokens();
+          oauth2Client.setCredentials({
+            access_token: tokens.accessToken,
+            refresh_token: tokens.refreshToken,
+          });
         }
       } else {
         account.status = 'expired';

@@ -746,11 +746,14 @@ test("Scheduler: Polls and claims due jobs in 'queued' status as well as 'schedu
     maxAttempts: 3,
   });
 
-  // Verify candidate query picks it up
+  // Verify candidate query picks it up (must match schedulerService.processDuePosts filter)
+  const now = new Date();
   const candidates = await Post.find({
-    status: { $in: ['scheduled', 'queued', 'retrying'] },
     $expr: { $lt: ['$attempts', '$maxAttempts'] },
-    $or: [{ scheduledAt: { $lte: new Date() } }, { nextRetryAt: { $lte: new Date() } }],
+    $or: [
+      { status: { $in: ['scheduled', 'queued'] }, scheduledAt: { $lte: now } },
+      { status: 'retrying', nextRetryAt: { $lte: now } },
+    ],
   });
 
   const found = candidates.find((c) => c._id.toString() === post._id.toString());
@@ -760,6 +763,118 @@ test("Scheduler: Polls and claims due jobs in 'queued' status as well as 'schedu
   await Post.deleteOne({ _id: post._id });
   await Video.deleteOne({ _id: video._id });
   await Account.deleteOne({ _id: account._id });
+});
+
+// Retry backoff: retrying posts must wait for nextRetryAt (ignore stale scheduledAt)
+test('Scheduler Due Query: retrying posts with future nextRetryAt are not claimed early', async () => {
+  const { video, account } = await createFixtures({ approvalStatus: 'approved' });
+  const pastDate = new Date(Date.now() - 60_000);
+  const futureRetry = new Date(Date.now() + 120_000);
+
+  const post = await Post.create({
+    videoId: video._id,
+    accountId: account._id,
+    platform: 'youtube',
+    title: 'Retry Backoff Guard',
+    scheduledAt: pastDate,
+    status: 'retrying',
+    publishingStatus: 'ready_for_dispatch',
+    attempts: 1,
+    maxAttempts: 3,
+    nextRetryAt: futureRetry,
+  });
+
+  const now = new Date();
+  const candidates = await Post.find({
+    $expr: { $lt: ['$attempts', '$maxAttempts'] },
+    $or: [
+      { status: { $in: ['scheduled', 'queued'] }, scheduledAt: { $lte: now } },
+      { status: 'retrying', nextRetryAt: { $lte: now } },
+    ],
+  });
+
+  const found = candidates.find((c) => c._id.toString() === post._id.toString());
+  assert.equal(found, undefined, 'Must not select retrying job before nextRetryAt');
+
+  await Post.deleteOne({ _id: post._id });
+  await Video.deleteOne({ _id: video._id });
+  await Account.deleteOne({ _id: account._id });
+});
+
+// Reline failed posts: keep original interval from today + skip expired accounts
+test('Scheduler: relineFailedPosts lines up connected accounts and blocks expired ones', async () => {
+  const { video, account: goodAccount } = await createFixtures({ approvalStatus: 'approved' });
+  const expiredAccount = await Account.create({
+    platform: 'youtube',
+    accountId: `yt_expired_${Date.now()}`,
+    accountName: 'Expired Channel',
+    encryptedAccessToken: 'dummy_enc_access_token',
+    status: 'expired',
+    isDemo: true,
+  });
+
+  const base = Date.now() - 3 * 24 * 60 * 60 * 1000;
+  const intervalMs = 2 * 60 * 60 * 1000; // original 2h gap
+
+  const failedGood1 = await Post.create({
+    videoId: video._id,
+    accountId: goodAccount._id,
+    platform: 'youtube',
+    title: 'Failed Good 1',
+    scheduledAt: new Date(base),
+    status: 'failed',
+    publishingStatus: 'failed',
+    attempts: 3,
+    maxAttempts: 3,
+    lastError: { message: 'quota', code: 'QUOTA_EXCEEDED', timestamp: new Date() },
+  });
+  const failedGood2 = await Post.create({
+    videoId: video._id,
+    accountId: goodAccount._id,
+    platform: 'youtube',
+    title: 'Failed Good 2',
+    scheduledAt: new Date(base + intervalMs),
+    status: 'failed',
+    publishingStatus: 'failed',
+    attempts: 3,
+    maxAttempts: 3,
+  });
+
+  const failedExpired = await Post.create({
+    videoId: video._id,
+    accountId: expiredAccount._id,
+    platform: 'youtube',
+    title: 'Failed Expired Account',
+    scheduledAt: new Date(base),
+    status: 'failed',
+    publishingStatus: 'failed',
+    attempts: 3,
+    maxAttempts: 3,
+  });
+
+  const result = await schedulerService.relineFailedPosts({
+    startAt: new Date(Date.now() + 120000),
+  });
+
+  assert.ok(result.linedUpCount >= 2);
+  assert.ok(result.blockedCount >= 1);
+
+  const relined1 = await Post.findById(failedGood1._id);
+  const relined2 = await Post.findById(failedGood2._id);
+  assert.equal(relined1.status, 'scheduled');
+  assert.equal(relined2.status, 'scheduled');
+  assert.equal(relined1.attempts, 0);
+  assert.ok(new Date(relined1.scheduledAt).getTime() > Date.now());
+
+  const gap = new Date(relined2.scheduledAt).getTime() - new Date(relined1.scheduledAt).getTime();
+  assert.equal(gap, intervalMs, 'Must preserve original 2h interval');
+
+  const stillFailed = await Post.findById(failedExpired._id);
+  assert.equal(stillFailed.status, 'failed');
+
+  await Post.deleteMany({ _id: { $in: [failedGood1._id, failedGood2._id, failedExpired._id] } });
+  await Video.deleteOne({ _id: video._id });
+  await Account.deleteMany({ _id: { $in: [goodAccount._id, expiredAccount._id] } });
 });
 
 // 21. Instagram Dispatch: Automatically dispatches Instagram Reel, creates container, and marks published

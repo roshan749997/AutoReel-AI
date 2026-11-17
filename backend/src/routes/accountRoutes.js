@@ -5,6 +5,7 @@ import { Post } from '../models/Post.js';
 import { WorkflowLog } from '../models/WorkflowLog.js';
 import { youtubeService } from '../services/youtubeService.js';
 import { instagramService } from '../services/instagramService.js';
+import { tokenRefreshService } from '../services/tokenRefreshService.js';
 import { verifyOAuthState } from '../services/cryptoService.js';
 import { verifyTransferState, exchangeAuthCode } from '../drive-transfer/oauth.js';
 import { requireAdminAuth } from '../middleware/auth.js';
@@ -344,6 +345,27 @@ router.patch('/:id/preferences', async (req, res, next) => {
       status: 'success',
       message: 'Account preferences updated successfully',
       data: account.toSafeJSON(),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Auto-connect / refresh YouTube + Instagram + Google Drive tokens
+router.post('/refresh-tokens', async (req, res, next) => {
+  try {
+    const force = req.body?.force === true || req.query?.force === 'true';
+    const summary = await tokenRefreshService.refreshAllConnections({ force });
+    const needsReconnect = summary.needsReconnect?.length || 0;
+    const healed = summary.healed || 0;
+    const refreshed = summary.refreshed || 0;
+    res.json({
+      status: 'success',
+      message:
+        needsReconnect > 0
+          ? `Auto-connect: refreshed ${refreshed}, healed ${healed}. ${needsReconnect} still need one manual Reconnect (revoked grant).`
+          : `Auto-connect OK: refreshed ${refreshed}, healed ${healed}, others still valid (YouTube + Instagram + Drive).`,
+      data: summary,
     });
   } catch (err) {
     next(err);

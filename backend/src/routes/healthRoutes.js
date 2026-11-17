@@ -53,7 +53,7 @@ router.get('/integrations', async (req, res) => {
     message: 'n8n not reachable at 127.0.0.1:5678',
   };
   try {
-    const n8nRes = await axios.get('http://127.0.0.1:5678/healthz', { timeout: 1500 });
+    const n8nRes = await axios.get('http://127.0.0.1:5678/healthz', { timeout: 400 });
     n8nStatus = {
       configured: true,
       connected: n8nRes.status === 200,
@@ -63,12 +63,12 @@ router.get('/integrations', async (req, res) => {
     n8nStatus.error = err.message;
   }
 
-  // Run all service checks concurrently with strict 2.5s timeout
+  // Run service checks concurrently with short timeouts (deferred from critical dashboard path)
   const [aiStatus, driveStatus, ytStatus, igStatus] = await Promise.all([
-    safeCheck(() => aiService.testConnection(), 2500),
-    safeCheck(() => googleDriveService.testConnection(), 2500),
-    safeCheck(() => youtubeService.testConnection(), 2500),
-    safeCheck(() => instagramService.testConnection(), 2500),
+    safeCheck(() => aiService.testConnection(), 1500),
+    safeCheck(() => googleDriveService.testConnection(), 1500),
+    safeCheck(() => youtubeService.testConnection(), 1500),
+    safeCheck(() => instagramService.testConnection(), 1500),
   ]);
 
   res.json({
@@ -130,7 +130,7 @@ router.get('/setup-checklist', async (req, res) => {
 
   let isN8nRunning = false;
   try {
-    const n8nRes = await axios.get('http://127.0.0.1:5678/healthz', { timeout: 1000 });
+    const n8nRes = await axios.get('http://127.0.0.1:5678/healthz', { timeout: 400 });
     isN8nRunning = n8nRes.status === 200;
   } catch {
     isN8nRunning = false;

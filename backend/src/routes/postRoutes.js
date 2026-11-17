@@ -9,35 +9,166 @@ import { AppError } from '../middleware/errorHandler.js';
 
 const router = Router();
 
-// 1. List posts with granular queue status filters, platform, accountId, and date ranges
+const UPCOMING_STATUSES = ['scheduled', 'queued', 'processing', 'retrying', 'paused', 'failed'];
+
+function buildPostListQuery(queryParams = {}) {
+  const query = {};
+
+  if (queryParams.status && queryParams.status !== 'all') {
+    if (queryParams.status === 'upcoming') {
+      query.status = { $in: UPCOMING_STATUSES };
+    } else if (String(queryParams.status).includes(',')) {
+      query.status = { $in: String(queryParams.status).split(',').map((s) => s.trim()).filter(Boolean) };
+    } else {
+      query.status = queryParams.status;
+    }
+  }
+
+  if (queryParams.platform && queryParams.platform !== 'all') {
+    query.platform = queryParams.platform;
+  }
+
+  if (queryParams.accountId && queryParams.accountId !== 'all') {
+    query.accountId = queryParams.accountId;
+  }
+
+  if (queryParams.from || queryParams.to) {
+    query.scheduledAt = {};
+    if (queryParams.from) query.scheduledAt.$gte = new Date(queryParams.from);
+    if (queryParams.to) query.scheduledAt.$lte = new Date(queryParams.to);
+  }
+
+  return query;
+}
+
+function emptyStatusCounts() {
+  return {
+    total: 0,
+    upcoming: 0,
+    draft: 0,
+    scheduled: 0,
+    queued: 0,
+    processing: 0,
+    retrying: 0,
+    paused: 0,
+    published: 0,
+    failed: 0,
+    cancelled: 0,
+    manual_review: 0,
+  };
+}
+
+async function aggregatePostCounts(baseQuery = {}) {
+  const match = { ...baseQuery };
+  delete match.status;
+
+  // Fast path: indexed per-status counts when no extra filters
+  if (Object.keys(match).length === 0) {
+    const statuses = [
+      'draft',
+      'scheduled',
+      'queued',
+      'processing',
+      'retrying',
+      'paused',
+      'published',
+      'failed',
+      'cancelled',
+      'manual_review',
+    ];
+    const results = await Promise.all(statuses.map((status) => Post.countDocuments({ status })));
+    const counts = emptyStatusCounts();
+    statuses.forEach((status, i) => {
+      counts[status] = results[i] || 0;
+      counts.total += counts[status];
+    });
+    counts.upcoming = UPCOMING_STATUSES.reduce((sum, status) => sum + (counts[status] || 0), 0);
+    return counts;
+  }
+
+  const rows = await Post.aggregate([
+    { $match: match },
+    { $group: { _id: '$status', count: { $sum: 1 } } },
+  ]);
+
+  const counts = emptyStatusCounts();
+  for (const row of rows) {
+    const key = row._id || 'unknown';
+    counts[key] = row.count;
+    counts.total += row.count;
+  }
+  counts.upcoming = UPCOMING_STATUSES.reduce((sum, status) => sum + (counts[status] || 0), 0);
+  return counts;
+}
+
+// Lightweight status counts for sidebar / overview (no post payloads)
+router.get('/stats', async (req, res, next) => {
+  try {
+    const baseQuery = buildPostListQuery({
+      platform: req.query.platform,
+      accountId: req.query.accountId,
+      from: req.query.from,
+      to: req.query.to,
+    });
+    delete baseQuery.status;
+
+    const counts = await aggregatePostCounts(baseQuery);
+    res.json({ status: 'success', data: counts });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 1. List posts with pagination + granular queue status filters
 router.get('/', async (req, res, next) => {
   try {
-    const query = {};
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit || '50', 10)), 200);
+    const skip = (page - 1) * limit;
+    const sortDir = req.query.sort === 'desc' ? -1 : 1;
+    const sortField = req.query.sortBy === 'publishedAt' ? 'publishedAt' : 'scheduledAt';
 
-    if (req.query.status && req.query.status !== 'all') {
-      query.status = req.query.status;
-    }
+    const query = buildPostListQuery(req.query);
+    const includeCounts = req.query.includeCounts === 'true' || req.query.includeCounts === '1';
+    const light = req.query.light === 'true' || req.query.light === '1';
 
-    if (req.query.platform && req.query.platform !== 'all') {
-      query.platform = req.query.platform;
-    }
+    const populateVideo = light
+      ? 'cleanTitle originalName folderId folderName'
+      : 'cleanTitle originalName driveFileId thumbnailUrl duration resolution aiMetadata folderId folderName folderPathIds folderPathNames';
+    const populateAccount = light
+      ? 'accountName platform status'
+      : 'accountName platform profilePictureUrl username status';
 
-    if (req.query.accountId && req.query.accountId !== 'all') {
-      query.accountId = req.query.accountId;
-    }
+    const postsPromise = Post.find(query)
+      .populate('videoId', populateVideo)
+      .populate('accountId', populateAccount)
+      .sort({ [sortField]: sortDir, _id: 1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
 
-    if (req.query.from || req.query.to) {
-      query.scheduledAt = {};
-      if (req.query.from) query.scheduledAt.$gte = new Date(req.query.from);
-      if (req.query.to) query.scheduledAt.$lte = new Date(req.query.to);
-    }
+    const totalPromise = Post.countDocuments(query);
+    const countsPromise = includeCounts
+      ? aggregatePostCounts((() => {
+          const countQuery = { ...query };
+          delete countQuery.status;
+          return countQuery;
+        })())
+      : Promise.resolve(null);
 
-    const posts = await Post.find(query)
-      .populate('videoId', 'cleanTitle originalName driveFileId thumbnailUrl duration resolution aiMetadata folderId folderName folderPathIds folderPathNames')
-      .populate('accountId', 'accountName platform profilePictureUrl username status')
-      .sort({ scheduledAt: 1 });
+    const [posts, total, counts] = await Promise.all([postsPromise, totalPromise, countsPromise]);
 
-    res.json({ status: 'success', data: posts });
+    res.json({
+      status: 'success',
+      data: posts,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+      ...(counts ? { counts } : {}),
+    });
   } catch (err) {
     next(err);
   }
@@ -411,26 +542,37 @@ router.post('/:id/cancel', async (req, res, next) => {
   }
 });
 
-// 9.5 Retry all failed posts in queue
+// 9.5 Reschedule failed posts from today using each account's original interval
 router.post('/retry-all-failed', async (req, res, next) => {
   try {
-    const failedPosts = await Post.find({ status: 'failed' });
-    let retriedCount = 0;
-    const errors = [];
+    const defaultIntervalMs = req.body?.intervalMinutes
+      ? Number(req.body.intervalMinutes) * 60 * 1000
+      : undefined;
 
-    for (const post of failedPosts) {
-      try {
-        await schedulerService.retryPost(post._id);
-        retriedCount++;
-      } catch (err) {
-        errors.push({ id: post._id, error: err.message });
-      }
-    }
+    const result = await schedulerService.relineFailedPosts({
+      ...(defaultIntervalMs ? { defaultIntervalMs } : {}),
+    });
+
+    const intervalSummary = (result.intervals || [])
+      .slice(0, 3)
+      .map((i) => `${i.accountName}: every ${i.intervalMinutes}m`)
+      .join('; ');
+
+    const windowText = result.window
+      ? ` Window: ${new Date(result.window.from).toLocaleString()} → ${new Date(result.window.to).toLocaleString()}.`
+      : '';
+
+    const intervalText = intervalSummary ? ` Intervals: ${intervalSummary}.` : '';
+
+    const blockedText =
+      result.blockedCount > 0
+        ? ` ${result.blockedCount} left failed — reconnect those social accounts first.`
+        : '';
 
     res.json({
       status: 'success',
-      message: `Reset ${retriedCount} of ${failedPosts.length} failed post(s) for retry.`,
-      data: { retriedCount, totalFailed: failedPosts.length, errors },
+      message: `Rescheduled ${result.linedUpCount} of ${result.totalFailed} failed post(s) from today using original time gaps.${windowText}${intervalText}${blockedText}`,
+      data: result,
     });
   } catch (err) {
     next(err);

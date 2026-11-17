@@ -74,7 +74,7 @@ const latestPost = (items) => {
   return [...items].sort((a, b) => new Date(b.scheduledAt) - new Date(a.scheduledAt))[0];
 };
 
-export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
+export const ChannelsModule = ({ accounts = [], onNavigate }) => {
   const [folders, setFolders] = useState([]);
   const [isLoadingFolders, setIsLoadingFolders] = useState(true);
   const [folderError, setFolderError] = useState('');
@@ -84,6 +84,7 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
   const [videoPage, setVideoPage] = useState(1);
   const [videoTotal, setVideoTotal] = useState(0);
   const [isLoadingVideos, setIsLoadingVideos] = useState(false);
+  const [posts, setPosts] = useState([]);
 
   const youtubeAccounts = accounts.filter((account) => account.platform === 'youtube' && account.status !== 'disconnected');
   const instagramAccounts = accounts.filter((account) => account.platform === 'instagram' && account.status !== 'disconnected');
@@ -186,6 +187,48 @@ export const ChannelsModule = ({ accounts = [], posts = [], onNavigate }) => {
       cancelled = true;
     };
   }, [selectedFolderId, videoPage]);
+
+  useEffect(() => {
+    if (!selectedFolderId) {
+      setPosts([]);
+      return undefined;
+    }
+    const pairForFolder = pairs[selectedFolderId] || {};
+    const accountIds = [pairForFolder.youtubeAccountId, pairForFolder.instagramAccountId].filter(Boolean);
+    if (accountIds.length === 0) {
+      setPosts([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const loadPosts = async () => {
+      try {
+        const results = await Promise.all(
+          accountIds.map((accountId) =>
+            api.getPosts({ accountId, limit: 100, page: 1 }).catch(() => ({ data: [] }))
+          )
+        );
+        if (cancelled) return;
+        const merged = [];
+        const seen = new Set();
+        for (const res of results) {
+          for (const post of res.data || []) {
+            if (!seen.has(post._id)) {
+              seen.add(post._id);
+              merged.push(post);
+            }
+          }
+        }
+        setPosts(merged);
+      } catch {
+        if (!cancelled) setPosts([]);
+      }
+    };
+    loadPosts();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFolderId, pairs]);
 
   const savePair = (folderId, patch) => {
     const folder = folders.find((item) => item._id === folderId);

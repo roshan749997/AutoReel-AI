@@ -359,16 +359,21 @@ export class SchedulerService {
     try {
       const now = new Date();
 
-      // Find due posts: scheduledAt <= now OR nextRetryAt <= now
-      // Strictly prevent endless loop:
-      // - Candidate status: 'scheduled', 'queued', or 'retrying'
+      // Find due posts with backoff respected:
+      // - scheduled/queued: due when scheduledAt <= now
+      // - retrying: due ONLY when nextRetryAt <= now (do not match on stale scheduledAt)
       // - Exclude jobs where attempts >= maxAttempts
       const candidatePosts = await Post.find({
-        status: { $in: ['scheduled', 'queued', 'retrying'] },
         $expr: { $lt: ['$attempts', '$maxAttempts'] },
         $or: [
-          { scheduledAt: { $lte: now } },
-          { nextRetryAt: { $lte: now } },
+          {
+            status: { $in: ['scheduled', 'queued'] },
+            scheduledAt: { $lte: now },
+          },
+          {
+            status: 'retrying',
+            nextRetryAt: { $lte: now },
+          },
         ],
       })
         .sort({ scheduledAt: 1 })
@@ -403,12 +408,24 @@ export class SchedulerService {
    * Uses findOneAndUpdate with status and attempt filters so two workers can NEVER claim the same post.
    */
   async claimAndProcess(candidate) {
+    const now = new Date();
+    const claimFilter =
+      candidate.status === 'retrying'
+        ? {
+            _id: candidate._id,
+            status: 'retrying',
+            nextRetryAt: { $lte: now },
+            $expr: { $lt: ['$attempts', '$maxAttempts'] },
+          }
+        : {
+            _id: candidate._id,
+            status: { $in: ['scheduled', 'queued'] },
+            scheduledAt: { $lte: now },
+            $expr: { $lt: ['$attempts', '$maxAttempts'] },
+          };
+
     const post = await Post.findOneAndUpdate(
-      {
-        _id: candidate._id,
-        status: { $in: ['scheduled', 'queued', 'retrying'] },
-        $expr: { $lt: ['$attempts', '$maxAttempts'] },
-      },
+      claimFilter,
       {
         $set: {
           status: 'processing',
@@ -477,7 +494,11 @@ export class SchedulerService {
       }
 
       // 3. Account status & authorization validation
-      if (account.status !== 'connected' || !account.isActive) {
+      // Network-blip "error" accounts still have valid tokens — allow publish; only block real auth failures
+      const networkBlip =
+        account.status === 'error' &&
+        /ETIMEDOUT|ENETUNREACH|ECONNRESET|Temporary network|connect E|timeout/i.test(account.errorMessage || '');
+      if ((!account.isActive || (account.status !== 'connected' && !networkBlip))) {
         const err = new Error(`Target account "${account.accountName}" is disconnected (status: ${account.status})`);
         err.isPermanent = true;
         throw err;
@@ -1001,8 +1022,8 @@ export class SchedulerService {
   /**
    * Manual Retry of failed/cancelled post
    */
-  async retryPost(postId) {
-    const post = await Post.findById(postId);
+  async retryPost(postId, { scheduledAt = null } = {}) {
+    const post = await Post.findById(postId).populate('accountId', 'accountName status platform');
     if (!post) throw new Error('Post not found');
 
     if (post.status === 'manual_review') {
@@ -1015,13 +1036,29 @@ export class SchedulerService {
       throw new Error(`Only failed or cancelled posts can be manually retried (status: '${post.status}')`);
     }
 
+    const account = post.accountId;
+    if (account && ['expired', 'disconnected', 'authorization_required'].includes(account.status)) {
+      throw new Error(
+        `Account "${account.accountName}" is ${account.status}. Reconnect the social account before retrying this post.`
+      );
+    }
+
+    const targetDate = scheduledAt ? new Date(scheduledAt) : new Date(Date.now() + 30_000);
+    if (Number.isNaN(targetDate.getTime())) {
+      throw new Error('Invalid scheduledAt for retry');
+    }
+
     post.status = 'scheduled';
+    post.publishingStatus = 'ready_for_dispatch';
+    post.scheduledAt = targetDate;
     post.attempts = 0;
     post.nextRetryAt = null;
-    post.lastError = null;
+    post.set('lastError', undefined);
+    post.claimedAt = null;
+    post.claimedBy = null;
     post.executionLogs.push({
       step: 'manual_retry_reset',
-      message: 'Reset for retry by user',
+      message: `Reset for retry by user — lined up at ${targetDate.toISOString()}`,
       level: 'info',
     });
     await post.save();
@@ -1030,11 +1067,236 @@ export class SchedulerService {
       level: 'info',
       module: 'scheduler',
       action: 'post_retry_reset',
-      message: `Post "${post.title}" reset for retry`,
-      metadata: { postId },
+      message: `Post "${post.title}" reset for retry at ${targetDate.toISOString()}`,
+      metadata: { postId, scheduledAt: targetDate },
     }).catch(() => {});
 
     return post;
+  }
+
+  /**
+   * Detect the original publish interval (median gap) from timestamps.
+   * Falls back to 120 minutes (same default as Video Library batch schedule).
+   */
+  detectScheduleIntervalMs(timestamps = [], fallbackMs = 120 * 60 * 1000) {
+    const sorted = timestamps
+      .map((t) => new Date(t).getTime())
+      .filter((t) => Number.isFinite(t))
+      .sort((a, b) => a - b);
+
+    const gaps = [];
+    for (let i = 1; i < sorted.length; i++) {
+      const gap = sorted[i] - sorted[i - 1];
+      // Ignore tiny/huge outliers (keep 5 min .. 7 days)
+      if (gap >= 5 * 60 * 1000 && gap <= 7 * 24 * 60 * 60 * 1000) {
+        gaps.push(gap);
+      }
+    }
+    if (gaps.length === 0) return fallbackMs;
+    gaps.sort((a, b) => a - b);
+    return gaps[Math.floor(gaps.length / 2)];
+  }
+
+  /**
+   * Line up failed posts using EACH ACCOUNT's original time interval.
+   * - Start date = today (keeps original clock time when possible)
+   * - End date extends automatically for the last video
+   * - Skips expired/disconnected accounts
+   */
+  async relineFailedPosts({
+    startAt = null,
+    defaultIntervalMs = 120 * 60 * 1000,
+  } = {}) {
+    const failedPosts = await Post.find({ status: 'failed' })
+      .populate('accountId', 'accountName platform status errorMessage settings')
+      .sort({ scheduledAt: 1, createdAt: 1 });
+
+    if (failedPosts.length === 0) {
+      return {
+        totalFailed: 0,
+        linedUpCount: 0,
+        blockedCount: 0,
+        linedUp: [],
+        blocked: [],
+        window: null,
+        intervals: [],
+      };
+    }
+
+    const activePosts = await Post.find({
+      status: { $in: ['scheduled', 'queued', 'retrying', 'processing', 'paused'] },
+    })
+      .select('accountId scheduledAt nextRetryAt status')
+      .lean();
+
+    const activeByAccount = new Map();
+    for (const active of activePosts) {
+      const accKey = String(active.accountId);
+      const t =
+        active.status === 'retrying' && active.nextRetryAt
+          ? new Date(active.nextRetryAt)
+          : active.scheduledAt
+            ? new Date(active.scheduledAt)
+            : null;
+      if (!t || Number.isNaN(t.getTime())) continue;
+      const list = activeByAccount.get(accKey) || [];
+      list.push(t);
+      activeByAccount.set(accKey, list);
+    }
+
+    const blocked = [];
+    const eligibleByAccount = new Map();
+
+    for (const post of failedPosts) {
+      const account = post.accountId;
+      const accountStatus = account?.status;
+      const accountName = account?.accountName || 'Unknown account';
+
+      if (
+        !account ||
+        ['expired', 'disconnected', 'authorization_required', 'error'].includes(accountStatus)
+      ) {
+        blocked.push({
+          id: post._id,
+          title: post.title,
+          platform: post.platform,
+          accountName,
+          reason: `Account is ${accountStatus || 'missing'}. Reconnect before lining up this post.`,
+        });
+        continue;
+      }
+
+      if (accountStatus && accountStatus !== 'connected') {
+        blocked.push({
+          id: post._id,
+          title: post.title,
+          platform: post.platform,
+          accountName,
+          reason: `Account status is "${accountStatus}". Fix the account first.`,
+        });
+        continue;
+      }
+
+      const accKey = String(account._id);
+      const bucket = eligibleByAccount.get(accKey) || {
+        account,
+        accountName,
+        posts: [],
+      };
+      bucket.posts.push(post);
+      eligibleByAccount.set(accKey, bucket);
+    }
+
+    const linedUp = [];
+    const intervals = [];
+    let earliest = null;
+    let latest = null;
+    const nowMs = Date.now();
+    const minStartMs = startAt ? new Date(startAt).getTime() : nowMs + 2 * 60 * 1000;
+
+    for (const [accKey, bucket] of eligibleByAccount.entries()) {
+      const posts = bucket.posts.sort(
+        (a, b) => new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime()
+      );
+
+      const originalTimes = posts.map((p) => p.scheduledAt);
+      const activeTimes = (activeByAccount.get(accKey) || []).map((d) => d.getTime());
+      const intervalMs = this.detectScheduleIntervalMs(
+        [...originalTimes, ...activeTimes],
+        defaultIntervalMs
+      );
+
+      // Start today, keep original clock time from the first failed post
+      const firstOriginal = new Date(posts[0].scheduledAt);
+      let cursor = new Date();
+      cursor.setHours(
+        firstOriginal.getHours(),
+        firstOriginal.getMinutes(),
+        firstOriginal.getSeconds(),
+        0
+      );
+      if (cursor.getTime() < minStartMs) {
+        cursor = new Date(minStartMs);
+      }
+
+      // Continue after any still-active scheduled work for this account
+      if (activeTimes.length > 0) {
+        const lastActive = Math.max(...activeTimes);
+        cursor = new Date(Math.max(cursor.getTime(), lastActive + intervalMs));
+      }
+
+      intervals.push({
+        accountId: accKey,
+        accountName: bucket.accountName,
+        platform: bucket.account.platform,
+        intervalMinutes: Math.round(intervalMs / 60000),
+        count: posts.length,
+        from: new Date(cursor),
+        to: new Date(cursor.getTime() + (posts.length - 1) * intervalMs),
+      });
+
+      for (let i = 0; i < posts.length; i++) {
+        const post = posts[i];
+        const slot = new Date(cursor.getTime() + i * intervalMs);
+
+        post.status = 'scheduled';
+        post.publishingStatus = 'ready_for_dispatch';
+        post.scheduledAt = slot;
+        post.attempts = 0;
+        post.nextRetryAt = null;
+        post.set('lastError', undefined);
+        post.claimedAt = null;
+        post.claimedBy = null;
+        post.executionLogs.push({
+          step: 'failed_reline',
+          message: `Rescheduled from today using original interval ${Math.round(intervalMs / 60000)}m → ${slot.toISOString()} (${post.timezone || 'UTC'})`,
+          level: 'info',
+        });
+        await post.save();
+
+        if (!earliest || slot < earliest) earliest = slot;
+        if (!latest || slot > latest) latest = slot;
+
+        linedUp.push({
+          id: post._id,
+          title: post.title,
+          platform: post.platform,
+          accountName: bucket.accountName,
+          scheduledAt: slot,
+          intervalMinutes: Math.round(intervalMs / 60000),
+        });
+      }
+    }
+
+    await WorkflowLog.create({
+      level: 'info',
+      module: 'scheduler',
+      action: 'failed_posts_relined',
+      message: `Lined up ${linedUp.length} failed post(s) from today using original intervals; blocked ${blocked.length}`,
+      metadata: {
+        linedUpCount: linedUp.length,
+        blockedCount: blocked.length,
+        windowStart: earliest,
+        windowEnd: latest,
+        intervals,
+      },
+    }).catch(() => {});
+
+    return {
+      totalFailed: failedPosts.length,
+      linedUpCount: linedUp.length,
+      blockedCount: blocked.length,
+      linedUp,
+      blocked,
+      intervals,
+      window:
+        earliest && latest
+          ? {
+              from: earliest,
+              to: latest,
+            }
+          : null,
+    };
   }
 
   /**

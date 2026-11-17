@@ -45,6 +45,7 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
   const [sortOption, setSortOption] = useState('recent'); // 'recent' | 'published_desc' | 'name_asc' | 'subs_desc'
   const [testingId, setTestingId] = useState(null);
   const [isTestingAll, setIsTestingAll] = useState(false);
+  const [isRefreshingTokens, setIsRefreshingTokens] = useState(false);
   const [actionLoadingId, setActionLoadingId] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
@@ -315,6 +316,29 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
     }
   };
 
+  // Proactive OAuth token refresh (keeps connected accounts alive; cannot recover revoked grants)
+  const handleRefreshTokens = async () => {
+    if (realAccounts.length === 0) return;
+    try {
+      setIsRefreshingTokens(true);
+      setErrorMsg(null);
+      const res = await api.refreshAccountTokens(false);
+      const needs = res.data?.needsReconnect?.length || 0;
+      if (needs > 0) {
+        setErrorMsg(
+          `${res.message || 'Some accounts need manual Reconnect.'} Google/Meta revoked grants cannot auto-heal — click Reconnect on those cards.`
+        );
+      } else {
+        setSuccessMsg(res.message || 'Tokens refreshed successfully.');
+      }
+      if (onReload) onReload();
+    } catch (err) {
+      setErrorMsg(`Token auto-refresh failed: ${err.message}`);
+    } finally {
+      setIsRefreshingTokens(false);
+    }
+  };
+
   // Disconnect account
   const handleDisconnectAccount = async (account) => {
     const confirmText = `Are you sure you want to disconnect "${account.accountName}" (${account.platform.toUpperCase()})?\n\nThis will revoke token access and disable automated scheduling for this channel.`;
@@ -425,6 +449,13 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
             Auth Required
           </span>
         );
+      case 'error':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+            <span className="w-1.5 h-1.5 rounded-full bg-sky-500" />
+            Unstable
+          </span>
+        );
       case 'disconnected':
       default:
         return (
@@ -435,6 +466,11 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
         );
     }
   };
+
+  const isNetworkIssueAccount = (acc) =>
+    /ETIMEDOUT|ENETUNREACH|ECONNRESET|Temporary network|IPv4 retry|connect E|network issue/i.test(
+      acc?.errorMessage || ''
+    );
 
   return (
     <div className="space-y-6">
@@ -797,21 +833,44 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
             <option value="name_asc">Name (A to Z)</option>
           </select>
 
-          {/* 1-Click Test All Tokens Button */}
+          {/* Auto-refresh + Check All */}
           {realAccounts.length > 0 && (
-            <Button
-              variant="secondary"
-              size="sm"
-              icon={RefreshCw}
-              isLoading={isTestingAll}
-              onClick={handleTestAllAccounts}
-              className="text-xs font-semibold py-1.5 bg-white border-slate-200 text-slate-700 hover:text-indigo-600 shadow-2xs cursor-pointer"
-              title="Test OAuth tokens for all connected channels"
-            >
-              Check All
-            </Button>
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={RefreshCw}
+                isLoading={isRefreshingTokens}
+                onClick={handleRefreshTokens}
+                className="text-xs font-semibold py-1.5 bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100 shadow-2xs cursor-pointer"
+                title="Auto-connect YouTube + Instagram + Google Drive (also runs every 15 min on the server)"
+              >
+                Auto Connect All
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={RefreshCw}
+                isLoading={isTestingAll}
+                onClick={handleTestAllAccounts}
+                className="text-xs font-semibold py-1.5 bg-white border-slate-200 text-slate-700 hover:text-indigo-600 shadow-2xs cursor-pointer"
+                title="Test OAuth tokens for all connected channels"
+              >
+                Check All
+              </Button>
+            </>
           )}
         </div>
+      </div>
+
+      <div className="px-1 -mt-2 mb-2 text-[11px] text-slate-500 flex items-start gap-1.5">
+        <Shield className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+        <span>
+          Auto-connect runs every 15 minutes for YouTube, Instagram, and Google Drive Transfer.
+          Temporary network errors are healed automatically. Only revoked grants (
+          <span className="font-semibold text-amber-700">invalid_grant</span>
+          ) need a one-time <span className="font-semibold">Reconnect Account</span> / Connect Drive.
+        </span>
       </div>
 
       {/* 5. Connected Account Cards Grid */}
@@ -846,7 +905,11 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredAccounts.map((acc) => {
             const isYt = acc.platform === 'youtube';
-            const isAuthIssue = ['expired', 'authorization_required', 'permission_error', 'error'].includes(acc.status);
+            const networkIssue = isNetworkIssueAccount(acc);
+            const isAuthIssue =
+              !networkIssue &&
+              ['expired', 'authorization_required', 'permission_error'].includes(acc.status);
+            const isUnstable = networkIssue || acc.status === 'error';
             const channelUrl = isYt
               ? acc.accountId?.startsWith('UC')
                 ? `https://www.youtube.com/channel/${acc.accountId}`
@@ -863,6 +926,8 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
                 className={`rounded-2xl bg-white border transition-all duration-150 flex flex-col justify-between overflow-hidden shadow-2xs hover:shadow-md hover:-translate-y-0.5 ${
                   isAuthIssue
                     ? 'border-amber-300 ring-2 ring-amber-400/20'
+                    : isUnstable
+                    ? 'border-sky-300 ring-1 ring-sky-200/60'
                     : isYt
                     ? 'border-slate-200 hover:border-red-300'
                     : 'border-slate-200 hover:border-pink-300'
@@ -947,7 +1012,31 @@ export const SocialAccountsModule = ({ accounts = [], onReload, isLoading }) => 
                     )}
                   </div>
 
-                  {/* Auth Issue Alert Box if expired */}
+                  {/* Network blip — NOT a real disconnect; auto-heal handles this */}
+                  {isUnstable && !isAuthIssue && (
+                    <div className="p-3 rounded-xl bg-sky-50 border border-sky-200 text-[11px] text-sky-900 space-y-2">
+                      <div className="flex items-start gap-1.5 font-semibold text-sky-800">
+                        <AlertTriangle className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
+                        <span>Temporary Network Issue</span>
+                      </div>
+                      <p className="text-[10px] text-sky-700 leading-tight">
+                        {acc.errorMessage ||
+                          'Render could not reach Meta/Google for a moment. Token is still saved — auto-connect will restore this. No reconnect needed.'}
+                      </p>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={RefreshCw}
+                        isLoading={isRefreshingTokens || testingId === acc._id}
+                        onClick={() => handleRefreshTokens()}
+                        className="w-full text-xs font-semibold py-1 bg-white border-sky-300 text-sky-900 hover:bg-sky-100/50 cursor-pointer"
+                      >
+                        Auto Connect Now
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Real auth expiry / revoked grant */}
                   {isAuthIssue && (
                     <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-[11px] text-amber-900 space-y-2">
                       <div className="flex items-start gap-1.5 font-semibold text-amber-800">

@@ -11,6 +11,8 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: NODE_OPTIONS
+        value: --dns-result-order=ipv4first
       - key: PORT
         value: 10000
       - key: CLIENT_URL
@@ -38,7 +40,7 @@ services:
       - key: META_APP_SECRET
         sync: false
       - key: META_REDIRECT_URI
-        sync: false
+        sync: false # Set to https://autoreel-ai-2.onrender.com/api/accounts/meta/callback (NOT ngrok)
 
   # ---------------------------------------------------------------------------
   # 2. Frontend Static Site (React Vite)
