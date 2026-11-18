@@ -196,7 +196,12 @@ export const api = {
       body: options,
       timeoutMs: 180000,
     }),
-  publishNow: (id) => request(`/posts/${id}/publish-now`, { method: 'POST' }),
+  publishNow: (id) =>
+    request(`/posts/${encodeURIComponent(id)}/publish-now`, {
+      method: 'POST',
+      // Video upload through Drive can take several minutes
+      timeoutMs: 15 * 60 * 1000,
+    }),
   deletePost: (id) => request(`/posts/${id}`, { method: 'DELETE' }),
   purgePosts: (params = {}) => {
     const query = new URLSearchParams(params).toString();

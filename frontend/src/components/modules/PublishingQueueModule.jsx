@@ -43,6 +43,8 @@ export const PublishingQueueModule = ({ accounts = [], onReload, onNavigate }) =
   const [isLoadingPosts, setIsLoadingPosts] = useState(true);
   const [activeLogPost, setActiveLogPost] = useState(null);
   const [isActionLoading, setIsActionLoading] = useState(false);
+  /** Only the row whose Publish Now was clicked should show busy / be targeted */
+  const [publishingPostId, setPublishingPostId] = useState(null);
 
   // Modals state
   const [reschedulePostItem, setReschedulePostItem] = useState(null);
@@ -354,17 +356,39 @@ export const PublishingQueueModule = ({ accounts = [], onReload, onNavigate }) =
     }
   };
 
-  const handlePublishNow = async (id) => {
-    if (!window.confirm('Publish this post now?')) return;
+  const handlePublishNow = async (post) => {
+    const id = post?._id || post;
+    if (!id) {
+      alert('Publish Now failed: missing post id.');
+      return;
+    }
+    if (publishingPostId) {
+      alert('Another Publish Now is already running. Wait for it to finish.');
+      return;
+    }
+
+    const label =
+      post?.videoId?.cleanTitle ||
+      post?.videoId?.originalName ||
+      post?.title ||
+      String(id);
+    if (
+      !window.confirm(
+        `Publish ONLY this one post now?\n\n"${label}"\n\nOther waiting posts will stay scheduled and will not be published by this click.`
+      )
+    ) {
+      return;
+    }
+
     try {
-      setIsActionLoading(true);
-      const res = await api.publishNow(id);
-      alert(res.message || 'Publish executed successfully!');
+      setPublishingPostId(String(id));
+      const res = await api.publishNow(String(id));
+      alert(res.message || `Published only: ${label}`);
       await refreshQueue();
     } catch (err) {
       alert(`Publish error: ${err.message}`);
     } finally {
-      setIsActionLoading(false);
+      setPublishingPostId(null);
     }
   };
 
@@ -778,16 +802,21 @@ export const PublishingQueueModule = ({ accounts = [], onReload, onNavigate }) =
                       </Button>
                     )}
 
-                    {/* Publish Now / Dispatch */}
+                    {/* Publish Now / Dispatch — single post only */}
                     {!isPublished && !isCancelled && (
                       <Button
                         variant="primary"
                         size="sm"
                         icon={Play}
-                        isLoading={isActionLoading}
-                        onClick={() => handlePublishNow(post._id)}
+                        isLoading={publishingPostId === String(post._id)}
+                        disabled={Boolean(publishingPostId) && publishingPostId !== String(post._id)}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handlePublishNow(post);
+                        }}
                         className="text-xs py-1"
-                        title="Upload and publish this post to YouTube now"
+                        title="Upload and publish ONLY this post now"
                       >
                         Publish Now
                       </Button>

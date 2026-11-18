@@ -18,6 +18,8 @@ export class SchedulerService {
   constructor() {
     this.timer = null;
     this.isProcessing = false;
+    /** When > 0, auto queue ticks skip so Publish Now cannot race into other due posts */
+    this.manualPublishDepth = 0;
     this.workerId = `worker_${process.pid}_${Math.random().toString(36).substring(2, 7)}`;
     this.concurrencyLimit = 2;
   }
@@ -367,6 +369,11 @@ export class SchedulerService {
    */
   async processDuePosts() {
     if (this.isProcessing) return;
+    // Do not auto-claim other queue items while an admin Publish Now is running
+    if (this.manualPublishDepth > 0) {
+      console.log('[Scheduler] Skipping auto tick — manual Publish Now in progress');
+      return;
+    }
     this.isProcessing = true;
 
     try {
@@ -831,37 +838,73 @@ export class SchedulerService {
 
   /**
    * Direct Dispatch for Admin Trigger ("Publish Now")
+   * Publishes ONLY the given post id — never batches siblings / due queue.
    */
   async publishPostNow(postId) {
-    const post = await Post.findById(postId)
-      .populate('videoId')
-      .populate('accountId');
+    if (!postId) {
+      throw new AppError('Post id is required for Publish Now', 400);
+    }
 
-    if (!post) throw new Error('Post not found');
-    if (post.status === 'published') throw new Error('Post is already published');
-    if (post.status === 'processing') throw new Error('Post is currently being processed by queue worker');
+    const existing = await Post.findById(postId).select('status platform title').lean();
+    if (!existing) throw new AppError('Post not found', 404);
+    if (existing.status === 'published') throw new AppError('Post is already published', 400);
+    if (existing.status === 'processing') {
+      throw new AppError('Post is currently being processed by queue worker', 409);
+    }
 
-    if (!(await isPlatformPublishingEnabled(post.platform))) {
+    if (!(await isPlatformPublishingEnabled(existing.platform))) {
       throw new AppError(
-        `${post.platform.toUpperCase()} publishing is STOPPED. Enable it under Automation → Platform Publishing Controls before publishing.`,
+        `${existing.platform.toUpperCase()} publishing is STOPPED. Enable it under Automation → Platform Publishing Controls before publishing.`,
         403,
-        { code: 'PLATFORM_PUBLISHING_DISABLED', platform: post.platform }
+        { code: 'PLATFORM_PUBLISHING_DISABLED', platform: existing.platform }
       );
     }
 
-    // Atomically claim
-    post.status = 'processing';
-    post.claimedAt = new Date();
-    post.claimedBy = `manual_${this.workerId}`;
-    post.executionLogs.push({
-      step: 'manual_dispatch',
-      message: 'Direct publish dispatch initiated by creator',
-      level: 'info',
-    });
-    await post.save();
+    // Pause auto-scheduler for the duration of this single manual upload
+    this.manualPublishDepth += 1;
 
-    await this.processClaimedPost(post);
-    return Post.findById(postId).populate('videoId').populate('accountId');
+    try {
+      // Atomic claim of THIS id only (prevents scheduler race on the same row)
+      const claimed = await Post.findOneAndUpdate(
+        {
+          _id: postId,
+          status: { $nin: ['published', 'processing', 'cancelled'] },
+        },
+        {
+          $set: {
+            status: 'processing',
+            claimedAt: new Date(),
+            claimedBy: `manual_${this.workerId}`,
+            scheduledAt: new Date(),
+          },
+          $push: {
+            executionLogs: {
+              timestamp: new Date(),
+              step: 'manual_dispatch',
+              message: `Direct Publish Now for this post only ("${existing.title || postId}") — auto queue paused for other posts`,
+              level: 'info',
+            },
+          },
+        },
+        { new: true }
+      )
+        .populate('videoId')
+        .populate('accountId');
+
+      if (!claimed) {
+        throw new AppError('Could not claim post for Publish Now (already published, processing, or cancelled)', 409);
+      }
+
+      if (String(claimed._id) !== String(postId)) {
+        throw new AppError('Publish Now safety check failed: claimed post id mismatch', 500);
+      }
+
+      console.log(`[Scheduler] Publish Now — single post ${claimed._id} (${claimed.platform})`);
+      await this.processClaimedPost(claimed);
+      return Post.findById(postId).populate('videoId').populate('accountId');
+    } finally {
+      this.manualPublishDepth = Math.max(0, this.manualPublishDepth - 1);
+    }
   }
 
   /**
