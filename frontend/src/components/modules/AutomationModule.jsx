@@ -14,6 +14,7 @@ import { Card, CardHeader } from '../common/Card.jsx';
 import { Button } from '../common/Button.jsx';
 import { Badge } from '../common/Badge.jsx';
 import { api } from '../../api/client.js';
+import { PlatformPublishingControls } from './PlatformPublishingControls.jsx';
 
 export const AutomationModule = ({ n8nStatus, onReload }) => {
   const [isTriggering, setIsTriggering] = useState(false);
@@ -50,6 +51,8 @@ export const AutomationModule = ({ n8nStatus, onReload }) => {
 
   return (
     <div className="space-y-6">
+      <PlatformPublishingControls />
+
       {/* n8n Status Card */}
       <Card>
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">

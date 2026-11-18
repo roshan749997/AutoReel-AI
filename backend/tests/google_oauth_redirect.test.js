@@ -9,19 +9,24 @@ test('OAuth Config: resolveGoogleRedirectUri overrides frontend URL to backend c
   const origRender = process.env.RENDER_EXTERNAL_URL;
 
   try {
-    // Case 1: Misconfigured with frontend domain
-    process.env.CLIENT_URL = 'https://autoreel-ai-1.onrender.com';
-    process.env.GOOGLE_REDIRECT_URI = 'https://autoreel-ai-1.onrender.com/api/accounts/google/callback';
-    process.env.RENDER_EXTERNAL_URL = 'https://autoreel-ai-2.onrender.com';
+    // Case 1: Misconfigured with new frontend domain
+    process.env.CLIENT_URL = 'https://autoreel-ai-1-aevj.onrender.com';
+    process.env.GOOGLE_REDIRECT_URI = 'https://autoreel-ai-1-aevj.onrender.com/api/accounts/google/callback';
+    process.env.RENDER_EXTERNAL_URL = 'https://autoreel-ai-fs3l.onrender.com';
 
     const resolved = resolveGoogleRedirectUri();
-    assert.equal(resolved, 'https://autoreel-ai-2.onrender.com/api/accounts/google/callback');
+    assert.equal(resolved, 'https://autoreel-ai-fs3l.onrender.com/api/accounts/google/callback');
 
     // Case 2: Correct backend URL
-    process.env.GOOGLE_REDIRECT_URI = 'https://autoreel-ai-2.onrender.com/api/accounts/google/callback';
-    assert.equal(resolveGoogleRedirectUri(), 'https://autoreel-ai-2.onrender.com/api/accounts/google/callback');
+    process.env.GOOGLE_REDIRECT_URI = 'https://autoreel-ai-fs3l.onrender.com/api/accounts/google/callback';
+    assert.equal(resolveGoogleRedirectUri(), 'https://autoreel-ai-fs3l.onrender.com/api/accounts/google/callback');
 
-    // Case 3: Localhost URL
+    // Case 3: Legacy frontend hostname still rewritten
+    process.env.CLIENT_URL = 'https://autoreel-ai-1.onrender.com';
+    process.env.GOOGLE_REDIRECT_URI = 'https://autoreel-ai-1.onrender.com/api/accounts/google/callback';
+    assert.equal(resolveGoogleRedirectUri(), 'https://autoreel-ai-fs3l.onrender.com/api/accounts/google/callback');
+
+    // Case 4: Localhost URL
     delete process.env.RENDER_EXTERNAL_URL;
     process.env.CLIENT_URL = 'http://localhost:5173';
     process.env.GOOGLE_REDIRECT_URI = 'http://localhost:5000/api/accounts/google/callback';
@@ -53,4 +58,3 @@ test('YouTube Service: Auth URL contains only YouTube scopes and correct redirec
   assert.equal(urlObj.searchParams.get('redirect_uri'), config.google.redirectUri);
   assert.equal(urlObj.searchParams.get('state'), 'test_state_token');
 });
-

@@ -16,6 +16,11 @@ const cleanApiKey = (val) => {
   return String(val).replace(/["']/g, '').trim();
 };
 
+/** Current Render production backend fallback (when RENDER_EXTERNAL_URL is unset). */
+export const DEFAULT_RENDER_BACKEND_URL = 'https://autoreel-ai-fs3l.onrender.com';
+const KNOWN_FRONTEND_HOST_RE =
+  /autoreel-ai-1(?:-aevj)?\.onrender\.com|autoreel-ai-1-aevj\.onrender\.com/i;
+
 export const resolveBackendPublicUrl = () => {
   const renderExternal = (process.env.RENDER_EXTERNAL_URL || '').trim().replace(/\/$/, '');
   const backendBase = (process.env.BACKEND_URL || '').trim().replace(/\/$/, '');
@@ -26,7 +31,7 @@ export const resolveBackendPublicUrl = () => {
   if (backendBase && !isDeadTunnelOrLocalUrl(backendBase)) return backendBase;
   if (publicUrl && !isDeadTunnelOrLocalUrl(publicUrl)) return publicUrl;
   if (/onrender\.com/i.test(clientUrl) || process.env.NODE_ENV === 'production') {
-    return 'https://autoreel-ai-2.onrender.com';
+    return DEFAULT_RENDER_BACKEND_URL;
   }
 
   const port = process.env.PORT || '5000';
@@ -48,7 +53,7 @@ const resolveProductionBackendBase = () => {
   if (renderExternal) return renderExternal;
   if (backendBase && !isDeadTunnelOrLocalUrl(backendBase)) return backendBase;
   if (/onrender\.com/i.test(clientUrl) || process.env.NODE_ENV === 'production') {
-    return 'https://autoreel-ai-2.onrender.com';
+    return DEFAULT_RENDER_BACKEND_URL;
   }
   return '';
 };
@@ -62,12 +67,12 @@ export const resolveGoogleRedirectUri = () => {
   const isFrontendDomain = (uri) => {
     if (!uri) return false;
     if (clientUrl && (uri === clientUrl || uri.startsWith(`${clientUrl}/`))) return true;
-    if (/autoreel-ai-1\.onrender\.com/i.test(uri)) return true;
+    if (KNOWN_FRONTEND_HOST_RE.test(uri)) return true;
     return false;
   };
 
   if (envUri && isFrontendDomain(envUri)) {
-    const targetBase = backendBase || 'https://autoreel-ai-2.onrender.com';
+    const targetBase = backendBase || DEFAULT_RENDER_BACKEND_URL;
     console.warn(`[OAuth Config] WARNING: GOOGLE_REDIRECT_URI (${envUri}) points to frontend domain. Overriding to backend callback: ${targetBase}/api/accounts/google/callback`);
     return `${targetBase}/api/accounts/google/callback`;
   }
@@ -93,7 +98,7 @@ export const resolveGoogleRedirectUri = () => {
 export const resolveMetaRedirectUri = () => {
   const envUri = (process.env.META_REDIRECT_URI || '').trim();
   const backendBase = resolveProductionBackendBase();
-  const productionCallback = `${backendBase || 'https://autoreel-ai-2.onrender.com'}/api/accounts/meta/callback`;
+  const productionCallback = `${backendBase || DEFAULT_RENDER_BACKEND_URL}/api/accounts/meta/callback`;
 
   // Production / Render must never send Instagram OAuth back to a dead ngrok tunnel
   if (envUri && isDeadTunnelOrLocalUrl(envUri) && (backendBase || process.env.NODE_ENV === 'production')) {

@@ -5,6 +5,12 @@ import { WorkflowLog } from '../models/WorkflowLog.js';
 import { googleDriveService } from './googleDriveService.js';
 import { youtubeService } from './youtubeService.js';
 import { instagramService } from './instagramService.js';
+import {
+  isPlatformPublishingEnabled,
+  releasePostForDisabledPlatform,
+  PLATFORM_DISABLED_PAUSE_REASON,
+} from './platformPublishingService.js';
+import { AppError } from '../middleware/errorHandler.js';
 import { config, resolveBackendPublicUrl } from '../config/env.js';
 import axios from 'axios';
 
@@ -300,7 +306,13 @@ export class SchedulerService {
       }
     }
 
-    // 6. Create Post in MongoDB
+    // 6. Create Post in MongoDB (paused if platform publishing kill-switch is OFF)
+    const platformEnabled = await isPlatformPublishingEnabled(platform);
+    const initialStatus = platformEnabled ? 'scheduled' : 'paused';
+    const scheduleLogMessage = platformEnabled
+      ? `Post scheduled for ${targetDate.toISOString()} (${timezone}) on account "${account.accountName}"`
+      : `Post saved but paused: ${platform} publishing is STOPPED. Will resume when platform is re-enabled.`;
+
     const post = await Post.create({
       videoId,
       accountId,
@@ -310,15 +322,16 @@ export class SchedulerService {
       hashtags: combinedTags,
       scheduledAt: targetDate,
       timezone,
-      status: 'scheduled',
+      status: initialStatus,
+      pauseReason: platformEnabled ? undefined : PLATFORM_DISABLED_PAUSE_REASON,
       publishingStatus: 'unattempted',
       idempotencyKey,
       requiresConfirmation: true,
       executionLogs: [
         {
-          step: 'scheduled',
-          message: `Post scheduled for ${targetDate.toISOString()} (${timezone}) on account "${account.accountName}"`,
-          level: 'info',
+          step: platformEnabled ? 'scheduled' : 'platform_publishing_paused',
+          message: scheduleLogMessage,
+          level: platformEnabled ? 'info' : 'warn',
         },
       ],
     });
@@ -359,11 +372,26 @@ export class SchedulerService {
     try {
       const now = new Date();
 
+      const [youtubeEnabled, instagramEnabled] = await Promise.all([
+        isPlatformPublishingEnabled('youtube'),
+        isPlatformPublishingEnabled('instagram'),
+      ]);
+      const enabledPlatforms = [
+        youtubeEnabled ? 'youtube' : null,
+        instagramEnabled ? 'instagram' : null,
+      ].filter(Boolean);
+
+      if (enabledPlatforms.length === 0) {
+        return;
+      }
+
       // Find due posts with backoff respected:
       // - scheduled/queued: due when scheduledAt <= now
       // - retrying: due ONLY when nextRetryAt <= now (do not match on stale scheduledAt)
       // - Exclude jobs where attempts >= maxAttempts
+      // - Exclude platforms whose publishing kill-switch is OFF
       const candidatePosts = await Post.find({
+        platform: { $in: enabledPlatforms },
         $expr: { $lt: ['$attempts', '$maxAttempts'] },
         $or: [
           {
@@ -450,6 +478,16 @@ export class SchedulerService {
       return;
     }
 
+    // Backend kill-switch: re-check persisted setting after claim (before any upload)
+    const platformEnabled = await isPlatformPublishingEnabled(post.platform);
+    if (!platformEnabled) {
+      console.warn(
+        `[Scheduler] ${post.platform} publishing is STOPPED — releasing claimed post ${post._id} without upload`
+      );
+      await releasePostForDisabledPlatform(post);
+      return;
+    }
+
     console.log(
       `[Scheduler] Worker ${this.workerId} claimed post ${post._id} (${post.platform.toUpperCase()}, Attempt ${post.attempts + 1}/${post.maxAttempts})`
     );
@@ -466,6 +504,13 @@ export class SchedulerService {
    * 5. Transitions to 'published' ONLY upon receiving confirmed video ID from YouTube API
    */
   async processClaimedPost(post) {
+    // 0. Platform publishing kill-switch (latest MongoDB value — never env/frontend only)
+    const platformEnabled = await isPlatformPublishingEnabled(post.platform);
+    if (!platformEnabled) {
+      await releasePostForDisabledPlatform(post);
+      return;
+    }
+
     // 1. Check maxAttempts guard before execution
     if (post.attempts >= post.maxAttempts) {
       const limitErr = new Error(`Max retry attempts (${post.maxAttempts}) exhausted.`);
@@ -478,6 +523,12 @@ export class SchedulerService {
     post.claimedAt = new Date();
 
     try {
+      // Re-check immediately before Drive stream / platform upload initiation
+      if (!(await isPlatformPublishingEnabled(post.platform))) {
+        await releasePostForDisabledPlatform(post, { undoAttempt: true });
+        return;
+      }
+
       const video = post.videoId;
       const account = post.accountId;
 
@@ -790,6 +841,14 @@ export class SchedulerService {
     if (post.status === 'published') throw new Error('Post is already published');
     if (post.status === 'processing') throw new Error('Post is currently being processed by queue worker');
 
+    if (!(await isPlatformPublishingEnabled(post.platform))) {
+      throw new AppError(
+        `${post.platform.toUpperCase()} publishing is STOPPED. Enable it under Automation → Platform Publishing Controls before publishing.`,
+        403,
+        { code: 'PLATFORM_PUBLISHING_DISABLED', platform: post.platform }
+      );
+    }
+
     // Atomically claim
     post.status = 'processing';
     post.claimedAt = new Date();
@@ -893,6 +952,7 @@ export class SchedulerService {
     }
 
     post.status = 'paused';
+    post.pauseReason = 'user';
     post.executionLogs.push({
       step: 'paused',
       message: 'Schedule paused by user',
@@ -922,7 +982,19 @@ export class SchedulerService {
       throw new Error(`Cannot resume post that is not paused (current status: '${post.status}')`);
     }
 
+    if (
+      post.pauseReason === PLATFORM_DISABLED_PAUSE_REASON &&
+      !(await isPlatformPublishingEnabled(post.platform))
+    ) {
+      throw new AppError(
+        `Cannot resume: ${post.platform.toUpperCase()} publishing is STOPPED. Re-enable the platform first.`,
+        403,
+        { code: 'PLATFORM_PUBLISHING_DISABLED', platform: post.platform }
+      );
+    }
+
     post.status = 'scheduled';
+    post.set('pauseReason', undefined);
     post.executionLogs.push({
       step: 'resumed',
       message: 'Schedule resumed by user',
@@ -1043,12 +1115,22 @@ export class SchedulerService {
       );
     }
 
+    const platformEnabled = await isPlatformPublishingEnabled(post.platform);
+    if (!platformEnabled) {
+      throw new AppError(
+        `${post.platform.toUpperCase()} publishing is STOPPED. Enable it under Platform Publishing Controls before retrying.`,
+        403,
+        { code: 'PLATFORM_PUBLISHING_DISABLED', platform: post.platform }
+      );
+    }
+
     const targetDate = scheduledAt ? new Date(scheduledAt) : new Date(Date.now() + 30_000);
     if (Number.isNaN(targetDate.getTime())) {
       throw new Error('Invalid scheduledAt for retry');
     }
 
     post.status = 'scheduled';
+    post.set('pauseReason', undefined);
     post.publishingStatus = 'ready_for_dispatch';
     post.scheduledAt = targetDate;
     post.attempts = 0;
@@ -1147,10 +1229,27 @@ export class SchedulerService {
     const blocked = [];
     const eligibleByAccount = new Map();
 
+    const [youtubeEnabled, instagramEnabled] = await Promise.all([
+      isPlatformPublishingEnabled('youtube'),
+      isPlatformPublishingEnabled('instagram'),
+    ]);
+    const platformEnabledMap = { youtube: youtubeEnabled, instagram: instagramEnabled };
+
     for (const post of failedPosts) {
       const account = post.accountId;
       const accountStatus = account?.status;
       const accountName = account?.accountName || 'Unknown account';
+
+      if (!platformEnabledMap[post.platform]) {
+        blocked.push({
+          id: post._id,
+          title: post.title,
+          platform: post.platform,
+          accountName,
+          reason: `${String(post.platform).toUpperCase()} publishing is STOPPED. Re-enable Platform Publishing Controls first.`,
+        });
+        continue;
+      }
 
       if (
         !account ||

@@ -19,6 +19,8 @@ import workflowRoutes from './routes/workflowRoutes.js';
 import logRoutes from './routes/logRoutes.js';
 import driveTransferRoutes from './routes/driveTransferRoutes.js';
 import channelRoutes from './routes/channelRoutes.js';
+import settingsRoutes from './routes/settingsRoutes.js';
+import { ensurePlatformPublishingDefaults } from './services/platformPublishingService.js';
 
 const app = express();
 
@@ -39,6 +41,7 @@ app.use('/api/workflows', workflowRoutes);
 app.use('/api/logs', logRoutes);
 app.use('/api/drive-transfer', driveTransferRoutes);
 app.use('/api/channels', channelRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Catch 404s
 app.use(notFoundHandler);
@@ -52,6 +55,13 @@ let server = null;
 const startServer = async () => {
   // Connect database
   await connectDatabase();
+
+  // Ensure platform publishing toggles exist (default ON; never overwrite existing)
+  try {
+    await ensurePlatformPublishingDefaults();
+  } catch (err) {
+    console.error(`[PlatformPublishing] Could not ensure defaults: ${err.message}`);
+  }
 
   // Start background post scheduler, token auto-refresh & 24/7 keep-alive worker
   schedulerService.start();

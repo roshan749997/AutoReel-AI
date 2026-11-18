@@ -15,8 +15,8 @@ jobs:
     steps:
       - name: Ping Backend API
         run: |
-          echo "Pinging AutoReel Backend (https://autoreel-ai-2.onrender.com/api/health)..."
-          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 https://autoreel-ai-2.onrender.com/api/health)
+          echo "Pinging AutoReel Backend (https://autoreel-ai-fs3l.onrender.com/api/health)..."
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 https://autoreel-ai-fs3l.onrender.com/api/health)
           echo "Backend returned HTTP Status: $STATUS_CODE"
           if [ "$STATUS_CODE" -ge 200 ] && [ "$STATUS_CODE" -lt 400 ]; then
             echo "✔ Backend is awake, healthy and active!"
@@ -26,7 +26,6 @@ jobs:
 
       - name: Ping Frontend Site
         run: |
-          echo "Pinging AutoReel Frontend (https://autoreel-ai-1.onrender.com)..."
-          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 45 https://autoreel-ai-1.onrender.com)
+          echo "Pinging AutoReel Frontend (https://autoreel-ai-1-aevj.onrender.com)..."
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 45 https://autoreel-ai-1-aevj.onrender.com)
           echo "Frontend returned HTTP Status: $STATUS_CODE"
-

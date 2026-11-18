@@ -103,6 +103,12 @@ const postSchema = new mongoose.Schema(
     cancellationReason: {
       type: String,
     },
+    // Distinguishes admin platform kill-switch pauses from manual user pauses
+    pauseReason: {
+      type: String,
+      enum: ['platform_disabled', 'user'],
+      default: undefined,
+    },
     requiresConfirmation: {
       type: Boolean,
       default: true,

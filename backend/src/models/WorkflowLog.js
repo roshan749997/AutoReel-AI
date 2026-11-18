@@ -11,7 +11,7 @@ const workflowLogSchema = new mongoose.Schema(
     module: {
       type: String,
       required: true,
-      enum: ['system', 'drive', 'ai', 'youtube', 'instagram', 'n8n', 'scheduler'],
+      enum: ['system', 'drive', 'ai', 'youtube', 'instagram', 'n8n', 'scheduler', 'settings'],
       index: true,
     },
     action: {

@@ -16,7 +16,7 @@ services:
       - key: PORT
         value: 10000
       - key: CLIENT_URL
-        sync: false # Set to deployed Frontend URL (e.g. https://autoreel-ai-1.onrender.com)
+        sync: false # Set to https://autoreel-ai-1-aevj.onrender.com
       - key: MONGODB_URI
         sync: false
       - key: ENCRYPTION_KEY
@@ -32,15 +32,15 @@ services:
       - key: GOOGLE_CLIENT_SECRET
         sync: false
       - key: GOOGLE_REDIRECT_URI
-        sync: false # Set to deployed Backend Callback: https://autoreel-ai-2.onrender.com/api/accounts/google/callback
+        sync: false # Set to https://autoreel-ai-fs3l.onrender.com/api/accounts/google/callback
       - key: DRIVE_TRANSFER_REDIRECT_URI
-        sync: false # Optional: https://autoreel-ai-2.onrender.com/api/drive-transfer/oauth/callback (or omit to share GOOGLE_REDIRECT_URI)
+        sync: false # Optional: https://autoreel-ai-fs3l.onrender.com/api/drive-transfer/oauth/callback (or omit to share GOOGLE_REDIRECT_URI)
       - key: META_APP_ID
         sync: false
       - key: META_APP_SECRET
         sync: false
       - key: META_REDIRECT_URI
-        sync: false # Set to https://autoreel-ai-2.onrender.com/api/accounts/meta/callback (NOT ngrok)
+        sync: false # Set to https://autoreel-ai-fs3l.onrender.com/api/accounts/meta/callback (NOT ngrok)
 
   # ---------------------------------------------------------------------------
   # 2. Frontend Static Site (React Vite)
@@ -57,4 +57,4 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        sync: false
+        sync: false # Set to https://autoreel-ai-fs3l.onrender.com/api  (must include /api)

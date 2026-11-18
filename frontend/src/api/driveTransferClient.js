@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_URL || '/api';
+import { API_BASE } from './client.js';
 
 async function request(endpoint, options = {}) {
   const storedKey = typeof window !== 'undefined' ? localStorage.getItem('dashboard_api_key') : '';

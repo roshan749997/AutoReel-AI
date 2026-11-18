@@ -21,7 +21,7 @@ const BOOT_CACHE_TTL_MS = 60_000;
 const getInitialTab = () => {
   if (typeof window !== 'undefined') {
     if (window.location.pathname.startsWith('/api/accounts/google/callback')) {
-      const backendBase = (import.meta.env.VITE_API_URL || 'https://autoreel-ai-2.onrender.com/api').replace(/\/api\/?$/, '');
+      const backendBase = (import.meta.env.VITE_API_URL || 'https://autoreel-ai-fs3l.onrender.com/api').replace(/\/api\/?$/, '');
       window.location.replace(`${backendBase}/api/accounts/google/callback${window.location.search}`);
       return 'accounts';
     }

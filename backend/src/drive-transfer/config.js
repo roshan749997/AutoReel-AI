@@ -25,8 +25,11 @@ export function getDriveTransferConfig() {
   ).trim();
 
   // If redirectUri mistakenly targets frontend domain, rewrite to backend callback
-  if (/autoreel-ai-1\.onrender\.com/i.test(redirectUri)) {
-    redirectUri = redirectUri.replace(/autoreel-ai-1\.onrender\.com/i, 'autoreel-ai-2.onrender.com');
+  // If redirect was wrongly pointed at the frontend static site, rewrite to backend
+  if (/autoreel-ai-1(?:-aevj)?\.onrender\.com/i.test(redirectUri)) {
+    redirectUri = redirectUri
+      .replace(/autoreel-ai-1-aevj\.onrender\.com/i, 'autoreel-ai-fs3l.onrender.com')
+      .replace(/autoreel-ai-1\.onrender\.com/i, 'autoreel-ai-fs3l.onrender.com');
   }
   const scope = String(process.env.DRIVE_TRANSFER_OAUTH_SCOPE || DEFAULT_SCOPE).trim();
   const clientUrl = String(process.env.CLIENT_URL || 'http://localhost:5173').trim();

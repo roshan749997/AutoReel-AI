@@ -1,12 +1,29 @@
+/** Current Render production backend (fallback when VITE_API_URL is unset). */
+export const DEFAULT_BACKEND_API_URL = 'https://autoreel-ai-fs3l.onrender.com/api';
+
+/**
+ * Normalize API base so callers always hit `/api/...` even if Render env
+ * was set to the bare backend origin without `/api`.
+ */
+export const normalizeApiBase = (url) => {
+  if (!url || typeof url !== 'string') return DEFAULT_BACKEND_API_URL;
+  let base = url.trim().replace(/\/+$/, '');
+  if (!base) return DEFAULT_BACKEND_API_URL;
+  if (!/\/api$/i.test(base)) {
+    base = `${base}/api`;
+  }
+  return base;
+};
+
 export const resolveApiBase = () => {
   const envUrl = import.meta.env.VITE_API_URL;
   if (envUrl && typeof envUrl === 'string' && envUrl.startsWith('http')) {
-    return envUrl.replace(/\/+$/, '');
+    return normalizeApiBase(envUrl);
   }
   if (typeof window !== 'undefined' && window.location?.hostname?.includes('onrender.com')) {
-    return 'https://autoreel-ai-2.onrender.com/api';
+    return DEFAULT_BACKEND_API_URL;
   }
-  return envUrl || '/api';
+  return normalizeApiBase(envUrl || '/api');
 };
 
 export const API_BASE = resolveApiBase();
@@ -189,6 +206,14 @@ export const api = {
   // Automation / n8n
   getWorkflowStatus: () => request('/workflows/status'),
   triggerWorkflow: (payload) => request('/workflows/trigger', { method: 'POST', body: payload }),
+
+  // Platform Publishing Controls (YouTube / Instagram kill-switches)
+  getPlatformPublishingSettings: () => request('/settings/platform-publishing'),
+  setPlatformPublishing: (platform, publishingEnabled, updatedBy = 'admin') =>
+    request(`/settings/platform-publishing/${encodeURIComponent(platform)}`, {
+      method: 'PATCH',
+      body: { publishingEnabled, updatedBy },
+    }),
 
   // Audit Logs
   getLogs: (params = {}, options = {}) => {
