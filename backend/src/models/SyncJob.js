@@ -47,6 +47,10 @@ const syncJobSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    totalRemoved: {
+      type: Number,
+      default: 0,
+    },
     foldersDiscovered: {
       type: [String],
       default: [],

@@ -1159,6 +1159,8 @@ export const VideoLibraryModule = ({
 
   const currentJob = syncProgress?.job;
   const isJobRunning = currentJob?.status === 'running';
+  const isJobPaused = currentJob?.status === 'paused';
+  const isJobCompleted = currentJob?.status === 'completed';
 
   const currentBulkJob = bulkProgress?.job;
   const isBulkRunning = currentBulkJob?.status === 'running';
@@ -1401,33 +1403,51 @@ export const VideoLibraryModule = ({
         </Card>
       )}
 
-      {/* 2. Drive Sync Progress Banner (Visible during sync) */}
-      {currentJob && isJobRunning && (
+      {/* 2. Drive Sync Progress Banner (Visible during sync / after complete) */}
+      {currentJob && (isJobRunning || isJobPaused || isJobCompleted) && (
         <Card className="border-indigo-500/30 bg-white/90">
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping" />
+                {isJobRunning && <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping" />}
                 <h4 className="text-xs font-semibold text-slate-800">
-                  Indexing Drive: {currentJob.folderName || 'Google Drive'}
+                  {isJobCompleted
+                    ? `Sync finished: ${currentJob.folderName || 'Google Drive'}`
+                    : `Indexing Drive: ${currentJob.folderName || 'Google Drive'}`}
                 </h4>
-                <Badge variant="info" className="text-[10px] capitalize">
+                <Badge
+                  variant={isJobCompleted ? 'success' : isJobPaused ? 'warning' : 'info'}
+                  className="text-[10px] capitalize"
+                >
                   {currentJob.status}
                 </Badge>
               </div>
-              <Button
-                variant="danger"
-                size="sm"
-                icon={Pause}
-                isLoading={isCancellingSync}
-                onClick={handleCancelSync}
-                className="text-xs py-1"
-              >
-                Pause / Cancel
-              </Button>
+              {isJobRunning && (
+                <Button
+                  variant="danger"
+                  size="sm"
+                  icon={Pause}
+                  isLoading={isCancellingSync}
+                  onClick={handleCancelSync}
+                  className="text-xs py-1"
+                >
+                  Pause / Cancel
+                </Button>
+              )}
+              {isJobPaused && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={Play}
+                  onClick={() => handleStartSync(true)}
+                  className="text-xs py-1"
+                >
+                  Resume Sync
+                </Button>
+              )}
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50/60 p-3 rounded-lg border border-slate-200 text-[11px]">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 bg-slate-50/60 p-3 rounded-lg border border-slate-200 text-[11px]">
               <div>
                 <span className="text-slate-500 block">Total Scanned:</span>
                 <span className="font-semibold text-slate-800 text-sm">{currentJob.totalScanned || 0}</span>
@@ -1441,10 +1461,19 @@ export const VideoLibraryModule = ({
                 <span className="font-semibold text-indigo-400 text-sm">{currentJob.totalUpdated || 0}</span>
               </div>
               <div>
+                <span className="text-slate-500 block">Removed from Drive:</span>
+                <span className="font-semibold text-amber-600 text-sm">{currentJob.totalRemoved || 0}</span>
+              </div>
+              <div>
                 <span className="text-slate-500 block">Pages Scanned:</span>
                 <span className="font-semibold text-slate-700 text-sm">{currentJob.pagesProcessed || 0}</span>
               </div>
             </div>
+            {isJobCompleted && (
+              <p className="text-[11px] text-slate-500">
+                Videos deleted in Google Drive are hidden from the library after a full sync completes. Press Resume/Start Sync again if status is paused.
+              </p>
+            )}
           </div>
         </Card>
       )}

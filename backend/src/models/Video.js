@@ -100,6 +100,13 @@ const videoSchema = new mongoose.Schema(
     isArchived: {
       type: Boolean,
       default: false,
+      index: true,
+    },
+    archivedAt: {
+      type: Date,
+    },
+    archiveReason: {
+      type: String,
     },
     publishedPlatforms: [
       {

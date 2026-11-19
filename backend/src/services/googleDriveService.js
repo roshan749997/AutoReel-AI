@@ -440,6 +440,10 @@ export class GoogleDriveService {
                       folderPathNames: folderTrail.names,
                       syncJobId: jobId,
                       indexingStatus: 'indexed',
+                      // Reappear if previously archived after Drive delete
+                      isArchived: false,
+                      archivedAt: null,
+                      archiveReason: null,
                       ...(syncAccount?._id || this.currentAccount?._id
                         ? { accountId: syncAccount?._id || this.currentAccount?._id }
                         : {}),
@@ -481,7 +485,20 @@ export class GoogleDriveService {
           await job.save();
         } while (pageToken && pagesThisRun < maxPages);
 
-        // If recursive traversal requested, discover child folders
+        // Hit page budget mid-folder — pause WITHOUT marking folder complete
+        // (otherwise prune would wrongly archive unscanned files)
+        if (pageToken) {
+          job.status = 'paused';
+          job.pageToken = pageToken;
+          job.lastHeartbeatAt = new Date();
+          await job.save();
+          console.log(
+            `[GoogleDriveService] Sync paused mid-folder ${currentFolderId} after ${pagesThisRun} pages (resume to continue)`
+          );
+          return;
+        }
+
+        // Folder fully listed — discover children, then mark complete
         if (recursive && currentFolderId) {
           const subfolders = await this.listChildFolders(drive, currentFolderId);
           for (const sub of subfolders) {
@@ -495,17 +512,20 @@ export class GoogleDriveService {
           }
         }
 
-        // Current folder completed
         visitedFolders.add(currentFolderId);
-        job.foldersCompleted.push(currentFolderId);
+        if (!job.foldersCompleted.includes(currentFolderId)) {
+          job.foldersCompleted.push(currentFolderId);
+        }
         folderQueue.shift();
-        pageToken = null; // Reset pageToken for next folder
+        pageToken = null;
         job.pageToken = null;
         await job.save();
       }
 
       // Check final state
-      if (folderQueue.length === 0 && !pageToken) {
+      if (folderQueue.length === 0) {
+        const removedCount = await this.pruneMissingVideosAfterSync(job);
+        job.totalRemoved = removedCount;
         job.status = 'completed';
         job.completedAt = new Date();
         await job.save();
@@ -514,11 +534,16 @@ export class GoogleDriveService {
           level: 'success',
           module: 'drive',
           action: 'sync_completed',
-          message: `Google Drive sync completed: ${job.totalIndexed} new indexed, ${job.totalUpdated} updated across ${job.pagesProcessed} pages.`,
-          metadata: { totalScanned: job.totalScanned, totalIndexed: job.totalIndexed },
+          message: `Google Drive sync completed: ${job.totalIndexed} new, ${job.totalUpdated} updated, ${removedCount} removed (deleted from Drive) across ${job.pagesProcessed} pages.`,
+          metadata: {
+            totalScanned: job.totalScanned,
+            totalIndexed: job.totalIndexed,
+            totalUpdated: job.totalUpdated,
+            totalRemoved: removedCount,
+          },
         });
       } else {
-        // Paused because reached maxPages per batch
+        // Paused because reached maxPages per batch (more folders remain)
         job.status = 'paused';
         await job.save();
       }
@@ -531,6 +556,49 @@ export class GoogleDriveService {
     } finally {
       this.activeJobs.delete(jobId);
     }
+  }
+
+  /**
+   * After a FULL sync of the job's folder tree, soft-archive Mongo videos that
+   * were not seen in this job (deleted/trashed/moved out of Drive scope).
+   * Does not hard-delete — preserves history and queued/published post refs.
+   */
+  async pruneMissingVideosAfterSync(job) {
+    const folderIds = [...new Set([job.folderId, ...(job.foldersCompleted || [])].filter(Boolean))];
+    if (!job?.jobId || folderIds.length === 0) {
+      return 0;
+    }
+
+    const result = await Video.updateMany(
+      {
+        isArchived: { $ne: true },
+        folderId: { $in: folderIds },
+        syncJobId: { $ne: job.jobId },
+      },
+      {
+        $set: {
+          isArchived: true,
+          archivedAt: new Date(),
+          archiveReason: 'not_found_in_drive_during_sync',
+          indexingError: 'File no longer present in Google Drive (removed during sync)',
+        },
+      }
+    );
+
+    const removedCount = result.modifiedCount || 0;
+    if (removedCount > 0) {
+      console.log(
+        `[GoogleDriveService] Archived ${removedCount} video(s) missing from Drive after sync ${job.jobId}`
+      );
+      await WorkflowLog.create({
+        level: 'warn',
+        module: 'drive',
+        action: 'sync_pruned_missing',
+        message: `Archived ${removedCount} video(s) that were deleted/moved out of Drive (no longer listed under synced folders).`,
+        metadata: { jobId: job.jobId, removedCount, folderCount: folderIds.length },
+      }).catch(() => {});
+    }
+    return removedCount;
   }
 
   async listChildFolders(drive, folderId) {
