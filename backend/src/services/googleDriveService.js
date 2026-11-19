@@ -884,6 +884,84 @@ export class GoogleDriveService {
   }
 
   /**
+   * Create a temporary publicly-readable Drive URL for Meta Instagram to pull.
+   * Avoids proxying the full video through Render (major Hobby 5GB saver).
+   * Always call releaseTemporaryPublicVideoAccess() in a finally block.
+   */
+  async createTemporaryPublicVideoAccess(fileId, accountId = null) {
+    if (!fileId) throw new Error('Drive file ID required for temporary public video access');
+
+    const drive = await this.getAuthenticatedClient(accountId);
+    let permissionId = null;
+
+    try {
+      const permRes = await this.retryWithBackoff(() =>
+        drive.permissions.create({
+          fileId,
+          requestBody: {
+            role: 'reader',
+            type: 'anyone',
+            allowFileDiscovery: false,
+          },
+          supportsAllDrives: true,
+          fields: 'id',
+        })
+      );
+      permissionId = permRes.data?.id || null;
+    } catch (err) {
+      // Permission may already exist (anyone with link)
+      console.warn(`[GoogleDrive] Temporary public permission create notice: ${err.message}`);
+    }
+
+    const meta = await this.retryWithBackoff(() =>
+      drive.files.get({
+        fileId,
+        fields: 'id,name,mimeType,webContentLink,webViewLink',
+        supportsAllDrives: true,
+      })
+    );
+
+    // Prefer direct download-style URLs Meta can fetch without Google login UI
+    const candidates = [
+      meta.data?.webContentLink || null,
+      `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=t`,
+      `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`,
+    ].filter(Boolean);
+
+    const videoUrl = candidates[0];
+    if (!videoUrl) {
+      throw new Error('Could not build a public Drive video URL for Instagram');
+    }
+
+    console.log(
+      `[GoogleDrive] Temporary public video URL ready for Instagram (file=${fileId}, perm=${permissionId || 'existing/unknown'})`
+    );
+
+    return {
+      videoUrl,
+      candidateUrls: candidates,
+      permissionId,
+      fileId,
+      release: async () => this.releaseTemporaryPublicVideoAccess(fileId, permissionId, accountId),
+    };
+  }
+
+  async releaseTemporaryPublicVideoAccess(fileId, permissionId, accountId = null) {
+    if (!fileId || !permissionId) return;
+    try {
+      const drive = await this.getAuthenticatedClient(accountId);
+      await drive.permissions.delete({
+        fileId,
+        permissionId,
+        supportsAllDrives: true,
+      });
+      console.log(`[GoogleDrive] Revoked temporary public permission ${permissionId} on ${fileId}`);
+    } catch (err) {
+      console.warn(`[GoogleDrive] Could not revoke temporary public permission: ${err.message}`);
+    }
+  }
+
+  /**
    * Alias for getFileStream for video streams
    */
   async getVideoStream(fileId) {

@@ -336,13 +336,14 @@ export const PublishedVideosModule = ({
                   <div className="relative aspect-video bg-slate-50 overflow-hidden group">
                     {video?._id || video?.thumbnailUrl ? (
                       <img
-                        src={getVideoThumbnailUrl(video?._id) || video?.thumbnailUrl}
+                        src={video?.thumbnailUrl || getVideoThumbnailUrl(video?._id)}
                         alt={post.title}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                         loading="lazy"
                         onError={(e) => {
-                          if (video?.thumbnailUrl && e.target.src !== video.thumbnailUrl) {
-                            e.target.src = video.thumbnailUrl;
+                          const proxy = getVideoThumbnailUrl(video?._id);
+                          if (proxy && !String(e.target.src || '').includes('/thumbnail')) {
+                            e.target.src = proxy;
                           }
                         }}
                       />

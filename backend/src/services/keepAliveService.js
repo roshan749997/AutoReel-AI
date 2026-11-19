@@ -1,13 +1,19 @@
-import { resolveBackendPublicUrl } from '../config/env.js';
+import { config, resolveBackendPublicUrl } from '../config/env.js';
 
 class KeepAliveService {
   constructor() {
     this.timer = null;
-    this.intervalMs = 10 * 60 * 1000; // 10 minutes (Render spins down after 15m idle)
+    this.intervalMs = config.keepAlive?.intervalMs || 14 * 60 * 1000;
   }
 
   start() {
     if (this.timer) return;
+
+    if (config.keepAlive?.enabled === false) {
+      console.log('[KeepAlive] Disabled via KEEP_ALIVE_ENABLED=false (saves bandwidth; Render may sleep after ~15m idle)');
+      return;
+    }
+
     const publicUrl = resolveBackendPublicUrl();
 
     // Only self-ping if deployed with a public HTTPS URL (e.g. Render production)
@@ -17,12 +23,13 @@ class KeepAliveService {
     }
 
     const healthUrl = `${publicUrl}/api/health`;
-    console.log(`[KeepAlive] 24/7 Uptime worker started for ${healthUrl} (interval: 10m)`);
+    console.log(
+      `[KeepAlive] Uptime worker started for ${healthUrl} (interval: ${Math.round(this.intervalMs / 60000)}m)`
+    );
 
     // Initial ping shortly after server boot (after 25s)
     setTimeout(() => this.ping(healthUrl), 25000);
 
-    // Recurring ping every 10 minutes
     this.timer = setInterval(() => this.ping(healthUrl), this.intervalMs);
   }
 
@@ -33,7 +40,7 @@ class KeepAliveService {
         signal: AbortSignal.timeout(15000),
       });
       if (res.ok) {
-        console.log(`[KeepAlive] 24/7 self-ping OK (${res.status}) - Render sleep prevented at ${new Date().toISOString()}`);
+        console.log(`[KeepAlive] Self-ping OK (${res.status}) at ${new Date().toISOString()}`);
       } else {
         console.warn(`[KeepAlive] Self-ping returned status ${res.status}`);
       }
@@ -46,10 +53,9 @@ class KeepAliveService {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
-      console.log('[KeepAlive] Stopped 24/7 worker');
+      console.log('[KeepAlive] Stopped');
     }
   }
 }
 
 export const keepAliveService = new KeepAliveService();
-

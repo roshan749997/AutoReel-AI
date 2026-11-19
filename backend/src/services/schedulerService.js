@@ -765,22 +765,100 @@ export class SchedulerService {
         });
         await post.save();
 
-        // Resolve public video URL for Meta container upload
-        const publicBaseUrl = resolveBackendPublicUrl();
-        const videoStreamUrl = `${publicBaseUrl}/api/videos/${video._id}/stream`;
-        console.log(`[Instagram Publish] Dispatching reel to Meta container with videoUrl=${videoStreamUrl}`);
-
         // Format caption with hashtags
         const tagsString = Array.isArray(post.hashtags) && post.hashtags.length > 0
           ? '\n\n' + post.hashtags.map((t) => (t.startsWith('#') ? t : `#${t}`)).join(' ')
           : '';
         const fullCaption = (post.caption || post.title || '').trim() + tagsString;
 
-        const publishResult = await instagramService.publishReel({
-          account,
-          videoUrl: videoStreamUrl,
-          caption: fullCaption,
-        });
+        // Prefer temporary Drive public URL so Meta does NOT pull video through Render (5GB saver).
+        // Optional fallback to Render /stream if Drive URL is rejected by Meta.
+        const preferDrivePublic = (config.meta?.videoSource || 'drive_public') !== 'render';
+        const allowRenderFallback = config.meta?.allowRenderStreamFallback !== false;
+        const publicBaseUrl = resolveBackendPublicUrl();
+        const renderStreamUrl = `${publicBaseUrl}/api/videos/${video._id}/stream`;
+
+        let publishResult = null;
+        let usedSource = 'render_stream';
+        let driveAccess = null;
+
+        try {
+          if (preferDrivePublic && video.driveFileId) {
+            try {
+              driveAccess = await googleDriveService.createTemporaryPublicVideoAccess(
+                video.driveFileId,
+                video.accountId || account._id
+              );
+              const urlsToTry = driveAccess.candidateUrls?.length
+                ? driveAccess.candidateUrls
+                : [driveAccess.videoUrl];
+
+              let lastDriveErr = null;
+              for (const candidateUrl of urlsToTry) {
+                try {
+                  console.log(`[Instagram Publish] Trying Drive public URL (no Render video egress): ${candidateUrl.slice(0, 80)}...`);
+                  post.executionLogs.push({
+                    step: 'instagram_video_source',
+                    message: 'Using temporary Google Drive public URL for Meta (avoids Render bandwidth)',
+                    level: 'info',
+                  });
+                  await post.save();
+
+                  publishResult = await instagramService.publishReel({
+                    account,
+                    videoUrl: candidateUrl,
+                    caption: fullCaption,
+                  });
+                  usedSource = 'drive_public';
+                  lastDriveErr = null;
+                  break;
+                } catch (drivePublishErr) {
+                  lastDriveErr = drivePublishErr;
+                  console.warn(
+                    `[Instagram Publish] Drive URL rejected/failed: ${drivePublishErr.message}`
+                  );
+                }
+              }
+
+              if (!publishResult && !allowRenderFallback && lastDriveErr) {
+                throw lastDriveErr;
+              }
+            } catch (driveSetupErr) {
+              console.warn(`[Instagram Publish] Drive public URL setup failed: ${driveSetupErr.message}`);
+              if (!allowRenderFallback) throw driveSetupErr;
+            }
+          }
+
+          if (!publishResult) {
+            if (!allowRenderFallback && preferDrivePublic) {
+              throw new Error(
+                'Instagram publish requires a Drive public URL, but it failed and Render stream fallback is disabled'
+              );
+            }
+            console.warn(
+              `[Instagram Publish] Falling back to Render stream URL (COUNTS AGAINST 5GB BANDWIDTH): ${renderStreamUrl}`
+            );
+            post.executionLogs.push({
+              step: 'instagram_video_source',
+              message: 'Fallback: Meta pulling video via Render /stream (uses outbound bandwidth)',
+              level: 'warn',
+            });
+            await post.save();
+
+            publishResult = await instagramService.publishReel({
+              account,
+              videoUrl: renderStreamUrl,
+              caption: fullCaption,
+            });
+            usedSource = 'render_stream';
+          }
+        } finally {
+          if (driveAccess?.release) {
+            await driveAccess.release().catch(() => {});
+          }
+        }
+
+        console.log(`[Instagram Publish] Completed via source=${usedSource}`);
 
         if (!publishResult || !publishResult.externalPostId) {
           throw new Error('Instagram Graph API did not return a valid media ID');

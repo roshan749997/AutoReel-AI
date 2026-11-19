@@ -1,14 +1,14 @@
-name: AutoReel 24x7 Keep-Alive & Cloud Monitor
+name: AutoReel Keep-Alive (bandwidth-light)
 
 on:
   schedule:
-    # Runs every 12 minutes 24/7 (Render spins down after 15 minutes of inactivity)
-    - cron: '*/12 * * * *'
-  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+    # Every 14 minutes — just under Render's ~15m idle spin-down
+    - cron: '*/14 * * * *'
+  workflow_dispatch:
 
 jobs:
   keep-alive:
-    name: Ping Render Services
+    name: Ping Backend Only
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -19,13 +19,9 @@ jobs:
           STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 https://autoreel-ai-fs3l.onrender.com/api/health)
           echo "Backend returned HTTP Status: $STATUS_CODE"
           if [ "$STATUS_CODE" -ge 200 ] && [ "$STATUS_CODE" -lt 400 ]; then
-            echo "✔ Backend is awake, healthy and active!"
+            echo "✔ Backend is awake"
           else
-            echo "⚠ Backend woke up or responded with status $STATUS_CODE"
+            echo "⚠ Backend status $STATUS_CODE"
           fi
 
-      - name: Ping Frontend Site
-        run: |
-          echo "Pinging AutoReel Frontend (https://autoreel-ai-1-aevj.onrender.com)..."
-          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 45 https://autoreel-ai-1-aevj.onrender.com)
-          echo "Frontend returned HTTP Status: $STATUS_CODE"
+      # Frontend static ping removed — it burned Render static bandwidth without helping the API.

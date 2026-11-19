@@ -601,7 +601,7 @@ export class InstagramService {
 
         status = statusRes.data?.status_code;
         if (status === 'ERROR') {
-          const detail = statusRes.data?.status || 'Media container processing failed';
+          const detail = statusRes.data?.status || statusRes.data?.status_code || 'Media container processing failed';
           throw new Error(`Meta Graph API video container processing failed with status ERROR: ${detail}`);
         }
       }

@@ -158,6 +158,20 @@ export const config = {
     appSecret: process.env.INSTAGRAM_APP_SECRET || process.env.META_APP_SECRET || '',
     redirectUri: resolveMetaRedirectUri(),
     authFlow: process.env.META_AUTH_FLOW || 'instagram_login', // 'instagram_login' | 'facebook_login'
+    // Prefer temporary Drive public URL for Meta pull (saves Render 5GB bandwidth).
+    // Set INSTAGRAM_VIDEO_SOURCE=render to force old Render /stream proxy.
+    videoSource: (process.env.INSTAGRAM_VIDEO_SOURCE || 'drive_public').toLowerCase(),
+    allowRenderStreamFallback: process.env.INSTAGRAM_ALLOW_RENDER_STREAM_FALLBACK !== 'false',
+  },
+
+  // Keep-alive / bandwidth helpers
+  keepAlive: {
+    enabled: process.env.KEEP_ALIVE_ENABLED !== 'false',
+    // Default 14m — just under Render's ~15m idle spin-down (fewer pings than 10m)
+    intervalMs: Math.max(
+      60_000,
+      parseInt(process.env.KEEP_ALIVE_INTERVAL_MS || String(14 * 60 * 1000), 10) || 14 * 60 * 1000
+    ),
   },
 
   // n8n

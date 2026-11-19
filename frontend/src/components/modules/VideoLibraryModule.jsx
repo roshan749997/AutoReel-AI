@@ -82,19 +82,21 @@ export function formatDuration(seconds) {
 
 export const VideoThumbnail = ({ video, onPreview }) => {
   const [imgError, setImgError] = useState(false);
+  // Prefer Drive thumbnailLink first — avoids Render thumbnail proxy bandwidth
+  const driveThumb = video.thumbnailUrl || '';
   const proxyUrl = getVideoThumbnailUrl(video._id);
-  const [src, setSrc] = useState(proxyUrl);
+  const [src, setSrc] = useState(driveThumb || proxyUrl);
 
   useEffect(() => {
-    setSrc(getVideoThumbnailUrl(video._id));
+    setSrc(video.thumbnailUrl || getVideoThumbnailUrl(video._id));
     setImgError(false);
-  }, [video._id]);
+  }, [video._id, video.thumbnailUrl]);
 
   return (
     <div
       onClick={onPreview}
       className="group/thumb relative w-16 h-20 sm:w-20 sm:h-24 rounded-lg overflow-hidden bg-white border border-slate-200 shrink-0 flex items-center justify-center cursor-pointer hover:border-indigo-500/60 transition-colors shadow-xs select-none"
-      title="Click to preview video"
+      title="Click to inspect (preview stream is optional — saves Render bandwidth)"
     >
       {!imgError && src ? (
         <img
@@ -102,8 +104,8 @@ export const VideoThumbnail = ({ video, onPreview }) => {
           alt=""
           referrerPolicy="no-referrer"
           onError={() => {
-            if (src !== video.thumbnailUrl && video.thumbnailUrl) {
-              setSrc(video.thumbnailUrl);
+            if (src === video.thumbnailUrl && proxyUrl) {
+              setSrc(proxyUrl);
             } else {
               setImgError(true);
             }
@@ -201,6 +203,11 @@ export const VideoLibraryModule = ({
 
   // In-app video preview player modal state
   const [previewVideo, setPreviewVideo] = useState(null);
+  const [previewStreamEnabled, setPreviewStreamEnabled] = useState(false);
+  const openPreview = (video) => {
+    setPreviewStreamEnabled(false);
+    setPreviewVideo(video);
+  };
 
   // Drive Connection & Folder sync state
   const [driveStatus, setDriveStatus] = useState(null);
@@ -2069,13 +2076,13 @@ export const VideoLibraryModule = ({
                     />
 
                     {/* Video Thumbnail (Authenticated Proxy + Graceful Fallback) */}
-                    <VideoThumbnail video={video} onPreview={() => setPreviewVideo(video)} />
+                    <VideoThumbnail video={video} onPreview={() => openPreview(video)} />
 
                     {/* Titles & Details */}
                     <div className="flex-1 min-w-0 space-y-1">
                       <div className="flex items-center gap-2">
                         <h4
-                          onClick={() => setPreviewVideo(video)}
+                          onClick={() => openPreview(video)}
                           className="text-xs sm:text-sm font-semibold text-slate-900 hover:text-indigo-700 transition-colors cursor-pointer truncate"
                           title="Click to preview video & details"
                         >
@@ -2177,7 +2184,7 @@ export const VideoLibraryModule = ({
                         variant="ghost"
                         size="sm"
                         icon={Play}
-                        onClick={() => setPreviewVideo(video)}
+                        onClick={() => openPreview(video)}
                         className="text-xs py-1 px-2 text-slate-700 hover:text-slate-900 hover:bg-slate-100 shrink-0"
                         title="Preview video stream & details"
                       >
@@ -3168,12 +3175,14 @@ export const VideoLibraryModule = ({
                         <div className="w-10 h-10 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center relative">
                           {video._id || video.thumbnailUrl ? (
                             <img
-                              src={getVideoThumbnailUrl(video._id) || video.thumbnailUrl}
+                              src={video.thumbnailUrl || getVideoThumbnailUrl(video._id)}
                               alt=""
                               className="w-full h-full object-cover"
+                              referrerPolicy="no-referrer"
                               onError={(e) => {
-                                if (video.thumbnailUrl && e.target.src !== video.thumbnailUrl) {
-                                  e.target.src = video.thumbnailUrl;
+                                const proxy = getVideoThumbnailUrl(video._id);
+                                if (proxy && e.target.src !== proxy) {
+                                  e.target.src = proxy;
                                 }
                               }}
                             />
@@ -3388,25 +3397,64 @@ export const VideoLibraryModule = ({
       {previewVideo && (
         <Modal
           isOpen={Boolean(previewVideo)}
-          onClose={() => setPreviewVideo(null)}
+          onClose={() => {
+            setPreviewVideo(null);
+            setPreviewStreamEnabled(false);
+          }}
           title="Video Inspection & Player"
           maxWidth="max-w-4xl"
         >
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
-              {/* Video Player Column */}
+              {/* Video Player Column — stream only after explicit Load (saves Render 5GB) */}
               <div className="md:col-span-7 bg-slate-900 rounded-xl overflow-hidden border border-slate-200 flex flex-col items-center justify-center min-h-[360px] relative">
-                <video
-                  key={previewVideo._id}
-                  controls
-                  autoPlay
-                  preload="metadata"
-                  poster={getVideoThumbnailUrl(previewVideo._id) || previewVideo.thumbnailUrl}
-                  className="w-full max-h-[460px] object-contain rounded-xl bg-slate-900"
-                  src={getVideoStreamUrl(previewVideo._id)}
-                >
-                  Your browser does not support HTML5 video streaming.
-                </video>
+                {previewStreamEnabled ? (
+                  <video
+                    key={`${previewVideo._id}-stream`}
+                    controls
+                    autoPlay
+                    preload="metadata"
+                    poster={previewVideo.thumbnailUrl || getVideoThumbnailUrl(previewVideo._id)}
+                    className="w-full max-h-[460px] object-contain rounded-xl bg-slate-900"
+                    src={getVideoStreamUrl(previewVideo._id)}
+                  >
+                    Your browser does not support HTML5 video streaming.
+                  </video>
+                ) : (
+                  <div className="flex flex-col items-center justify-center gap-3 p-6 text-center">
+                    {previewVideo.thumbnailUrl || getVideoThumbnailUrl(previewVideo._id) ? (
+                      <img
+                        src={previewVideo.thumbnailUrl || getVideoThumbnailUrl(previewVideo._id)}
+                        alt=""
+                        referrerPolicy="no-referrer"
+                        className="max-h-[280px] rounded-lg object-contain opacity-90"
+                      />
+                    ) : (
+                      <Film className="w-12 h-12 text-slate-500" />
+                    )}
+                    <p className="text-xs text-slate-300 max-w-sm">
+                      In-app video preview streams through Render and uses your free 5 GB bandwidth.
+                      Load only if you need it.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewStreamEnabled(true)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-400"
+                    >
+                      Load preview stream
+                    </button>
+                    {previewVideo.driveWebViewLink && (
+                      <a
+                        href={previewVideo.driveWebViewLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[11px] text-indigo-300 hover:text-indigo-200 underline"
+                      >
+                        Open in Google Drive instead
+                      </a>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Video Specs & AI Metadata Column */}
